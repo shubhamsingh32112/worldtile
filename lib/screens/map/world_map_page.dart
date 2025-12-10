@@ -6,6 +6,11 @@ import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/map_search_bar.dart';
+import '../../widgets/map/draw_rectangle_button.dart';
+import '../../widgets/map/rectangle_controls.dart';
+import '../../services/land_service.dart';
+import 'rectangle_drawing/rectangle_drawing_controller.dart';
+import 'rectangle_drawing/rectangle_model.dart';
 
 /// WorldMapPage displays a full world map using Mapbox Maps SDK
 /// 
@@ -28,6 +33,14 @@ class _WorldMapPageState extends State<WorldMapPage> {
   String? _errorMessage;
   Timer? _loadingTimeout;
   bool _hasAppliedCustomFog = false;
+  
+  // Rectangle drawing state
+  RectangleDrawingController? _rectangleController;
+  double _currentZoom = 0.0;
+  
+  // User polygons state
+  List<RectangleModel> _userPolygons = [];
+  bool _isLoadingPolygons = false;
 
   @override
   void initState() {
@@ -197,6 +210,29 @@ class _WorldMapPageState extends State<WorldMapPage> {
 
     // Subsequent loads: clean up halo/shadow artifacts.
     await _removeHaloEffects(style);
+    
+    // Initialize rectangle drawing controller after style is ready
+    if (_rectangleController == null && currentMap != null) {
+      try {
+        _rectangleController = RectangleDrawingController();
+        await _rectangleController!.init(currentMap);
+        
+        // Get initial camera state
+        final cameraState = await currentMap.getCameraState();
+        if (mounted) {
+          setState(() {
+            _currentZoom = cameraState.zoom;
+          });
+        }
+        
+        debugPrint('✅ Rectangle drawing controller initialized');
+      } catch (e) {
+        debugPrint('⚠️ Error initializing rectangle controller: $e');
+      }
+    }
+    
+    // Load user polygons when map is ready
+    await _loadUserPolygons();
   }
 
   /// Replace default fog/atmosphere with a darker, no-haze setup and dimmer stars.
@@ -353,6 +389,253 @@ class _WorldMapPageState extends State<WorldMapPage> {
     _zoomToLocation(latitude, longitude);
   }
 
+  /// Handles map tap events for rectangle placement
+  void _onMapTap(MapContentGestureContext context) async {
+    if (_rectangleController == null || !_rectangleController!.isInitialized) {
+      return;
+    }
+
+    // Only handle taps if in placement mode
+    if (_rectangleController!.isPlacementMode) {
+      final position = Position(
+        context.point.coordinates.lng,
+        context.point.coordinates.lat,
+      );
+
+      debugPrint('📍 Placing rectangle at: (${position.lng}, ${position.lat})');
+      
+      try {
+        await _rectangleController!.placeAt(position);
+        
+        if (mounted) {
+          setState(() {
+            // Trigger UI rebuild to show rectangle controls
+          });
+        }
+      } catch (e) {
+        debugPrint('❌ Error placing rectangle: $e');
+      }
+    }
+  }
+
+  /// Handles camera change events to track zoom level
+  void _onCameraChange(CameraChangedEventData data) async {
+    if (mapboxMap == null) return;
+
+    try {
+      final cameraState = await mapboxMap!.getCameraState();
+      if (mounted) {
+        setState(() {
+          _currentZoom = cameraState.zoom;
+        });
+      }
+    } catch (e) {
+      debugPrint('⚠️ Error getting camera state: $e');
+    }
+  }
+
+  /// Handles draw button press to enter placement mode
+  void _onDrawButtonPressed() {
+    if (_rectangleController == null || !_rectangleController!.isInitialized) {
+      debugPrint('⚠️ Rectangle controller not initialized');
+      return;
+    }
+
+    _rectangleController!.enterPlacementMode();
+
+    if (mounted) {
+      setState(() {
+        // Trigger UI rebuild
+      });
+    }
+    
+    debugPrint('🎨 Entered rectangle placement mode');
+  }
+
+  /// Handles rectangle delete action
+  Future<void> _onDeleteRectangle() async {
+    if (_rectangleController == null) return;
+
+    try {
+      await _rectangleController!.clear();
+      
+      if (mounted) {
+        setState(() {
+          // Trigger UI rebuild
+        });
+      }
+      
+      debugPrint('🗑️ Rectangle deleted');
+    } catch (e) {
+      debugPrint('❌ Error deleting rectangle: $e');
+    }
+  }
+
+  /// Load user polygons from backend
+  Future<void> _loadUserPolygons() async {
+    if (_isLoadingPolygons) return;
+    
+    setState(() {
+      _isLoadingPolygons = true;
+    });
+
+    try {
+      final result = await LandService.getUserPolygons();
+      
+      if (result['success'] == true) {
+        final polygonsData = result['polygons'] as List;
+        final polygons = polygonsData
+            .map((data) => RectangleModel.fromMongoData(data))
+            .toList();
+        
+        setState(() {
+          _userPolygons = polygons;
+        });
+        
+        // Display polygons on map
+        await _displayUserPolygons();
+        
+        debugPrint('✅ Loaded ${polygons.length} user polygons');
+      } else {
+        debugPrint('⚠️ Failed to load polygons: ${result['message']}');
+      }
+    } catch (e) {
+      debugPrint('❌ Error loading polygons: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingPolygons = false;
+        });
+      }
+    }
+  }
+
+  /// Display all user polygons on the map
+  Future<void> _displayUserPolygons() async {
+    if (mapboxMap == null || _userPolygons.isEmpty) return;
+    
+    try {
+      // Create a FeatureCollection from all polygons
+      final features = _userPolygons
+          .map((polygon) => polygon.toGeoJsonFeature())
+          .toList();
+      
+      final featureCollection = {
+        'type': 'FeatureCollection',
+        'features': features,
+      };
+      
+      // Use a separate source for user polygons
+      const sourceId = 'user-polygons-source';
+      const fillLayerId = 'user-polygons-fill-layer';
+      const lineLayerId = 'user-polygons-line-layer';
+      
+      final style = mapboxMap!.style;
+      
+      // Add source
+      try {
+        await style.addSource(GeoJsonSource(
+          id: sourceId,
+          data: jsonEncode(featureCollection),
+        ));
+      } catch (e) {
+        // Source might already exist, update it
+        await style.setStyleSourceProperty(
+          sourceId,
+          'data',
+          jsonEncode(featureCollection),
+        );
+      }
+      
+      // Add fill layer
+      try {
+        await style.addLayer(
+          FillLayer(
+            id: fillLayerId,
+            sourceId: sourceId,
+            fillColor: Colors.blue.value,
+            fillOpacity: 0.2,
+          ),
+        );
+      } catch (e) {
+        // Layer might already exist
+      }
+      
+      // Add line layer
+      try {
+        await style.addLayer(
+          LineLayer(
+            id: lineLayerId,
+            sourceId: sourceId,
+            lineColor: Colors.blue.value,
+            lineWidth: 2.0,
+          ),
+        );
+      } catch (e) {
+        // Layer might already exist
+      }
+      
+      debugPrint('✅ Displayed ${_userPolygons.length} user polygons on map');
+    } catch (e) {
+      debugPrint('❌ Error displaying polygons: $e');
+    }
+  }
+
+  /// Save the current rectangle as a polygon
+  Future<void> _saveCurrentRectangle() async {
+    if (_rectangleController?.rectangle == null) {
+      debugPrint('⚠️ No rectangle to save');
+      return;
+    }
+    
+    final rectangle = _rectangleController!.rectangle!;
+    final geoJson = rectangle.toGeoJsonFeature()['geometry'] as Map<String, dynamic>;
+    
+    try {
+      final result = await LandService.savePolygon(
+        geometry: geoJson,
+        areaInAcres: rectangle.areaInAcres,
+        name: 'My Polygon ${DateTime.now().toString().substring(0, 10)}',
+      );
+      
+      if (result['success'] == true) {
+        // Reload polygons to get the updated list
+        await _loadUserPolygons();
+        
+        // Show success message
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Polygon saved successfully!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+        
+        debugPrint('✅ Polygon saved successfully');
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Failed to save polygon: ${result['message']}'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('❌ Error saving polygon: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error saving polygon: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   /// Handles map creation errors
   /// Extracts detailed error message from MapLoadingErrorEventData
   void _onMapError(Object error) {
@@ -507,19 +790,35 @@ class _WorldMapPageState extends State<WorldMapPage> {
           onMapCreated: _onMapCreated,
           onStyleLoadedListener: _onStyleLoaded,
           onMapLoadErrorListener: _onMapError,
+          onTapListener: _onMapTap,
+          onCameraChangeListener: _onCameraChange,
           cameraOptions: CameraOptions(
             center: Point(
               coordinates: Position(0.0, 0.0), // Center of the world
             ),
             zoom: 0.0, // Full world view
           ),
-          styleUri: "mapbox://styles/mapbox/satellite-streets-v12",
+          styleUri: "mapbox://styles/arhaan21/cmiz2ed9a003301sacraodhpo",
         ),
         // Search bar overlay
         if (_isMapReady)
           MapSearchBar(
             onPlaceSelected: _onPlaceSelected,
             hintText: 'Search for a place (e.g., rt nagar, Bangalore)',
+          ),
+        // Rectangle drawing button (only visible when zoomed in enough)
+        if (_isMapReady && _currentZoom >= 12.0)
+          DrawRectangleButton(
+            currentZoom: _currentZoom,
+            isPlacementMode: _rectangleController?.isPlacementMode ?? false,
+            onPressed: _onDrawButtonPressed,
+          ),
+        // Rectangle controls (only visible when rectangle exists)
+        if (_isMapReady && _rectangleController?.rectangle != null)
+          RectangleControls(
+            rectangle: _rectangleController!.rectangle,
+            onDelete: _onDeleteRectangle,
+            onSave: _saveCurrentRectangle,
           ),
         // Loading indicator overlay
         if (!_isMapReady)
@@ -568,6 +867,7 @@ class _WorldMapPageState extends State<WorldMapPage> {
   @override
   void dispose() {
     _loadingTimeout?.cancel();
+    _rectangleController?.dispose();
     mapboxMap?.dispose();
     super.dispose();
   }

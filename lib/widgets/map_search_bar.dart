@@ -10,12 +10,17 @@ class MapSearchBar extends StatefulWidget {
   /// Parameters: latitude, longitude
   final Function(double lat, double lng) onPlaceSelected;
 
+  /// Callback when search is cleared
+  /// Used to reset map to default view
+  final VoidCallback? onSearchCleared;
+
   /// Optional placeholder text
   final String? hintText;
 
   const MapSearchBar({
     super.key,
     required this.onPlaceSelected,
+    this.onSearchCleared,
     this.hintText,
   });
 
@@ -69,6 +74,10 @@ class _MapSearchBarState extends State<MapSearchBar> {
         _isSearching = false;
         _errorMessage = null;
       });
+      // Notify parent to reset map view when search is cleared
+      if (widget.onSearchCleared != null) {
+        widget.onSearchCleared!();
+      }
       return;
     }
 
@@ -129,6 +138,10 @@ class _MapSearchBarState extends State<MapSearchBar> {
       _errorMessage = null;
     });
     _focusNode.unfocus();
+    // Notify parent to reset map view
+    if (widget.onSearchCleared != null) {
+      widget.onSearchCleared!();
+    }
   }
 
   @override
@@ -193,62 +206,113 @@ class _MapSearchBarState extends State<MapSearchBar> {
             top: 80,
             left: 16,
             right: 16,
-            child: Container(
-              constraints: const BoxConstraints(maxHeight: 300),
-              decoration: BoxDecoration(
-                color: AppTheme.surfaceColor,
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.3),
-                    blurRadius: 12,
-                    offset: const Offset(0, 4),
+            child: Material(
+              elevation: 8,
+              borderRadius: BorderRadius.circular(12),
+              color: Colors.transparent,
+              child: Container(
+                constraints: const BoxConstraints(maxHeight: 300),
+                decoration: BoxDecoration(
+                  color: AppTheme.surfaceColor,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: AppTheme.primaryColor.withOpacity(0.3),
+                    width: 1.5,
                   ),
-                ],
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Flexible(
-                    child: ListView.separated(
-                      shrinkWrap: true,
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                      itemCount: _searchResults.length,
-                      separatorBuilder: (context, index) => Divider(
-                        height: 1,
-                        color: AppTheme.backgroundColor,
-                        indent: 16,
-                        endIndent: 16,
-                      ),
-                      itemBuilder: (context, index) {
-                        final place = _searchResults[index];
-                        return ListTile(
-                          leading: Icon(
-                            Icons.location_on,
-                            color: AppTheme.primaryColor,
-                          ),
-                          title: Text(
-                            place.name,
-                            style: Theme.of(context).textTheme.bodyLarge,
-                          ),
-                          subtitle: place.context != null
-                              ? Text(
-                                  place.context!,
-                                  style: Theme.of(context).textTheme.bodySmall,
-                                )
-                              : Text(
-                                  place.placeName,
-                                  style: Theme.of(context).textTheme.bodySmall,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                          onTap: () => _selectPlace(place),
-                          hoverColor: AppTheme.backgroundColor.withOpacity(0.3),
-                        );
-                      },
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.5),
+                      blurRadius: 16,
+                      offset: const Offset(0, 6),
+                      spreadRadius: 2,
                     ),
-                  ),
-                ],
+                    BoxShadow(
+                      color: AppTheme.primaryColor.withOpacity(0.1),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        itemCount: _searchResults.length,
+                        separatorBuilder: (context, index) => Divider(
+                          height: 1,
+                          color: AppTheme.backgroundColor.withOpacity(0.5),
+                          indent: 16,
+                          endIndent: 16,
+                        ),
+                        itemBuilder: (context, index) {
+                          final place = _searchResults[index];
+                          return Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              onTap: () => _selectPlace(place),
+                              borderRadius: BorderRadius.circular(8),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                child: ListTile(
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 4,
+                                  ),
+                                  leading: Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: AppTheme.primaryColor.withOpacity(0.2),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Icon(
+                                      Icons.location_on,
+                                      color: AppTheme.primaryColor,
+                                      size: 24,
+                                    ),
+                                  ),
+                                  title: Text(
+                                    place.name,
+                                    style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                                          color: AppTheme.textPrimary,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                  ),
+                                  subtitle: place.context != null
+                                      ? Padding(
+                                          padding: const EdgeInsets.only(top: 4),
+                                          child: Text(
+                                            place.context!,
+                                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                                  color: AppTheme.textSecondary,
+                                                ),
+                                          ),
+                                        )
+                                      : Padding(
+                                          padding: const EdgeInsets.only(top: 4),
+                                          child: Text(
+                                            place.placeName,
+                                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                                  color: AppTheme.textSecondary,
+                                                ),
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),

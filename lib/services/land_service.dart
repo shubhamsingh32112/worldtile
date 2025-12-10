@@ -252,6 +252,110 @@ class LandService {
       };
     }
   }
+
+  /// Save a polygon to the backend (requires authentication)
+  static Future<Map<String, dynamic>> savePolygon({
+    required Map<String, dynamic> geometry, // GeoJSON Polygon
+    required double areaInAcres,
+    String? name,
+    String? description,
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/polygons'),
+        headers: await _getHeaders(),
+        body: jsonEncode({
+          'geometry': geometry,
+          'areaInAcres': areaInAcres,
+          if (name != null) 'name': name,
+          if (description != null) 'description': description,
+        }),
+      );
+
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode == 201) {
+        return {
+          'success': true,
+          'polygon': data['polygon'],
+          'message': data['message'] ?? 'Polygon saved successfully',
+        };
+      } else {
+        return {
+          'success': false,
+          'message': data['message'] ?? 'Failed to save polygon',
+        };
+      }
+    } catch (e) {
+      return {
+        'success': false,
+        'message': 'Connection error: ${e.toString()}',
+      };
+    }
+  }
+
+  /// Get all polygons for the authenticated user
+  static Future<Map<String, dynamic>> getUserPolygons() async {
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/polygons'),
+        headers: await _getHeaders(),
+      );
+
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode == 200) {
+        return {
+          'success': true,
+          'polygons': data['polygons'] ?? [],
+          'count': data['count'] ?? 0,
+        };
+      } else {
+        return {
+          'success': false,
+          'message': data['message'] ?? 'Failed to fetch polygons',
+          'polygons': [],
+          'count': 0,
+        };
+      }
+    } catch (e) {
+      return {
+        'success': false,
+        'message': 'Connection error: ${e.toString()}',
+        'polygons': [],
+        'count': 0,
+      };
+    }
+  }
+
+  /// Delete a polygon by ID
+  static Future<Map<String, dynamic>> deletePolygon(String polygonId) async {
+    try {
+      final response = await http.delete(
+        Uri.parse('$baseUrl/polygons/$polygonId'),
+        headers: await _getHeaders(),
+      );
+
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode == 200) {
+        return {
+          'success': true,
+          'message': data['message'] ?? 'Polygon deleted successfully',
+        };
+      } else {
+        return {
+          'success': false,
+          'message': data['message'] ?? 'Failed to delete polygon',
+        };
+      }
+    } catch (e) {
+      return {
+        'success': false,
+        'message': 'Connection error: ${e.toString()}',
+      };
+    }
+  }
 }
 
 
