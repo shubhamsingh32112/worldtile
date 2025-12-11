@@ -81,6 +81,27 @@ class RectangleModel {
       createdAt: createdAt ?? this.createdAt,
     );
   }
+/// Returns true if the given (lng, lat) lies inside the rectangle polygon.
+bool containsPoint(num lng, num lat)
+{
+  bool inside = false;
+  final pts = coordinates;
+
+  for (int i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    final xi = pts[i].lng;
+    final yi = pts[i].lat;
+    final xj = pts[j].lng;
+    final yj = pts[j].lat;
+
+    final intersect =
+        ((yi > lat) != (yj > lat)) &&
+        (lng < (xj - xi) * (lat - yi) / (yj - yi + 0.00000001) + xi);
+
+    if (intersect) inside = !inside;
+  }
+
+  return inside;
+}
 
   /// GeoJSON feature representation for map layers.
   Map<String, dynamic> toGeoJsonFeature() {
@@ -102,5 +123,7 @@ class RectangleModel {
 
   /// Corner-only list (excludes closing point).
   List<Position> get corners => coordinates.take(4).toList(growable: false);
+
+
 }
 

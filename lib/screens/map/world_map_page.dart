@@ -33,7 +33,8 @@ class _WorldMapPageState extends State<WorldMapPage> {
   String? _errorMessage;
   Timer? _loadingTimeout;
   bool _hasAppliedCustomFog = false;
-  
+  RectangleModel? _selectedRectangle;
+
   // Rectangle drawing state
   RectangleDrawingController? _rectangleController;
   double _currentZoom = 0.0;
@@ -224,8 +225,10 @@ class _WorldMapPageState extends State<WorldMapPage> {
             _currentZoom = cameraState.zoom;
           });
         }
-        
+
         debugPrint('✅ Rectangle drawing controller initialized');
+// Enable symbol-layer tap detection for selecting rectangles
+
       } catch (e) {
         debugPrint('⚠️ Error initializing rectangle controller: $e');
       }
@@ -234,6 +237,7 @@ class _WorldMapPageState extends State<WorldMapPage> {
     // Load user polygons when map is ready
     await _loadUserPolygons();
   }
+// Listen for symbol clicks (for selecting rectangles)
 
   /// Replace default fog/atmosphere with a darker, no-haze setup and dimmer stars.
   Future<bool> _applyCustomFog(StyleManager style) async {
@@ -390,33 +394,55 @@ class _WorldMapPageState extends State<WorldMapPage> {
   }
 
   /// Handles map tap events for rectangle placement
-  void _onMapTap(MapContentGestureContext context) async {
-    if (_rectangleController == null || !_rectangleController!.isInitialized) {
-      return;
-    }
+/// Handles map tap events (selection + placement)
+void _onMapTap(MapContentGestureContext ctx) async {
+  if (_rectangleController == null || !_rectangleController!.isInitialized) {
+    return;
+  }
 
-    // Only handle taps if in placement mode
-    if (_rectangleController!.isPlacementMode) {
-      final position = Position(
-        context.point.coordinates.lng,
-        context.point.coordinates.lat,
-      );
+  final tapLng = ctx.point.coordinates.lng;
+  final tapLat = ctx.point.coordinates.lat;
 
-      debugPrint('📍 Placing rectangle at: (${position.lng}, ${position.lat})');
-      
-      try {
-        await _rectangleController!.placeAt(position);
-        
-        if (mounted) {
-          setState(() {
-            // Trigger UI rebuild to show rectangle controls
-          });
-        }
-      } catch (e) {
-        debugPrint('❌ Error placing rectangle: $e');
+  // -------------------------------------------
+  // 1) If in placement mode → place rectangle
+  // -------------------------------------------
+  if (_rectangleController!.isPlacementMode) {
+    final position = Position(tapLng, tapLat);
+    await _rectangleController!.placeAt(position);
+
+    if (mounted) setState(() {});
+    debugPrint("📍 Rectangle placed at $position");
+    return;
+  }
+
+  // -------------------------------------------
+  // 2) Selection mode (tap anywhere INSIDE polygon)
+  // -------------------------------------------
+  final rect = _rectangleController!.rectangle;
+
+  if (rect != null) {
+    final hit = rect.containsPoint(tapLng, tapLat);
+
+    if (hit) {
+     setState(() => _selectedRectangle = rect);
+await _rectangleController!.updateSelectionHighlight(true);
+debugPrint("🎯 Rectangle selected by INSIDE hit: ${rect.id}");
+return;
+
+    } else {
+      if (_selectedRectangle != null) {
+       setState(() => _selectedRectangle = null);
+await _rectangleController!.updateSelectionHighlight(false);
+debugPrint("❌ Rectangle deselected");
+
       }
     }
   }
+}
+
+
+
+
 
   /// Handles camera change events to track zoom level
   void _onCameraChange(CameraChangedEventData data) async {

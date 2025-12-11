@@ -73,6 +73,41 @@ class RectangleDrawingController {
     _rectangle = updated;
     await _syncGeoJson();
   }
+/// Highlight rectangle when selected (true) or reset (false)
+Future<void> updateSelectionHighlight(bool isSelected) async {
+  final style = _mapboxMap?.style;
+  if (style == null) return;
+
+  try {
+    // Update FILL COLOR + OPACITY
+    await style.setStyleLayerProperty(
+      _fillLayerId,
+      "fill-color",
+      isSelected ? "#FFD54F" : "#00FFAA",   // gold / original
+    );
+
+    await style.setStyleLayerProperty(
+      _fillLayerId,
+      "fill-opacity",
+      isSelected ? 0.45 : 0.30,
+    );
+
+    // Update BORDER COLOR
+    await style.setStyleLayerProperty(
+      _lineLayerId,
+      "line-color",
+      isSelected ? "#FFA000" : "#00FFAA",   // darker gold border
+    );
+
+    await style.setStyleLayerProperty(
+      _lineLayerId,
+      "line-width",
+      isSelected ? 3.0 : 2.0,
+    );
+  } catch (e) {
+    debugPrint("⚠️ updateSelectionHighlight failed: $e");
+  }
+}
 
   /// Clear the current rectangle (remove from map).
   Future<void> clear() async {
@@ -108,8 +143,10 @@ class RectangleDrawingController {
       throw StateError('Map style is not available.');
     }
     await _addSourceIfMissing(style);
-    await _addFillLayerIfMissing(style);
-    await _addLineLayerIfMissing(style);
+await _addFillLayerIfMissing(style);
+await _addLineLayerIfMissing(style);
+await _addSelectionLayerIfMissing(style);  // NEW
+
   }
 
   Future<void> _addSourceIfMissing(StyleManager style) async {
@@ -155,6 +192,32 @@ Future<void> _addLineLayerIfMissing(StyleManager style) async {
   }
 }
 
+// --- New selection source/layer IDs ---
+static const String _selectionSourceId = 'rectangle-selection-source';
+static const String _selectionLayerId = 'rectangle-selection-layer';
+
+// Add a symbol layer to enable tapping rectangles
+Future<void> _addSelectionLayerIfMissing(StyleManager style) async {
+  try {
+    await style.addSource(GeoJsonSource(
+      id: _selectionSourceId,
+      data: jsonEncode(_emptyFeatureCollection),
+    ));
+  } catch (_) {}
+
+  try {
+    await style.addLayer(
+      SymbolLayer(
+        id: _selectionLayerId,
+        sourceId: _selectionSourceId,
+        iconSize: 1.0,
+        // Replace with an actual icon in your assets
+        iconImage: "marker-15",
+        iconOpacity: 0.01,  // nearly invisible
+      ),
+    );
+  } catch (_) {}
+}
 
 
   Future<void> _removeLayer(StyleManager style, String layerId) async {
@@ -173,30 +236,59 @@ Future<void> _addLineLayerIfMissing(StyleManager style) async {
     }
   }
 
-  Future<void> _syncGeoJson() async {
-    final style = _mapboxMap?.style;
-    if (style == null) return;
+Future<void> _syncGeoJson() async {
+  final style = _mapboxMap?.style;
+  if (style == null) return;
 
-    final featureCollection = _rectangle == null
-        ? _emptyFeatureCollection
-        : {
-            'type': 'FeatureCollection',
-            'features': [_rectangle!.toGeoJsonFeature()],
-          };
+  // ---- update rectangle fill/line source ----
+  final featureCollection = _rectangle == null
+      ? _emptyFeatureCollection
+      : {
+          'type': 'FeatureCollection',
+          'features': [_rectangle!.toGeoJsonFeature()],
+        };
 
-    try {
-await style.setStyleSourceProperty(
-  _sourceId,
-  "data",
-  jsonEncode(featureCollection),
-);
-
-    } catch (e) {
-      if (kDebugMode) {
-        debugPrint('Failed to update GeoJSON source: $e');
-      }
+  try {
+    await style.setStyleSourceProperty(
+      _sourceId,
+      "data",
+      jsonEncode(featureCollection),
+    );
+  } catch (e) {
+    if (kDebugMode) {
+      debugPrint('Failed to update GeoJSON source: $e');
     }
   }
+
+  // ---- update selection marker source ----
+  try {
+    final selectionData = _rectangle == null
+        ? _emptyFeatureCollection
+        : {
+            "type": "FeatureCollection",
+            "features": [
+              {
+                "type": "Feature",
+                "geometry": {
+                  "type": "Point",
+                  "coordinates": [
+                    _rectangle!.center.lng,
+                    _rectangle!.center.lat,
+                  ]
+                },
+                "properties": {"id": _rectangle!.id},
+              }
+            ]
+          };
+
+    await style.setStyleSourceProperty(
+      _selectionSourceId,
+      "data",
+      jsonEncode(selectionData),
+    );
+  } catch (_) {}
+}
+
 
   Map<String, dynamic> get _emptyFeatureCollection => {
         'type': 'FeatureCollection',
