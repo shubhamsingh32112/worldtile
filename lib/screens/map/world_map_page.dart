@@ -13,7 +13,7 @@ import 'rectangle_drawing/rectangle_drawing_controller.dart';
 import 'rectangle_drawing/rectangle_model.dart';
 
 /// WorldMapPage displays a full world map using Mapbox Maps SDK
-/// 
+///
 /// This widget shows a world map view with:
 /// - Full world view (zoom level 0)
 /// - Centered at coordinates (0, 0)
@@ -34,11 +34,15 @@ class _WorldMapPageState extends State<WorldMapPage> {
   Timer? _loadingTimeout;
   bool _hasAppliedCustomFog = false;
   RectangleModel? _selectedRectangle;
+// --- Dragging state ---
+  bool _isDraggingHandle = false;
+  int? _activeCornerIndex;
+  bool _waitingForDragStart = false;
 
   // Rectangle drawing state
   RectangleDrawingController? _rectangleController;
   double _currentZoom = 0.0;
-  
+
   // User polygons state
   List<RectangleModel> _userPolygons = [];
   bool _isLoadingPolygons = false;
@@ -53,7 +57,8 @@ class _WorldMapPageState extends State<WorldMapPage> {
     _loadingTimeout = Timer(const Duration(seconds: 15), () {
       if (mounted && !_isMapReady && _errorMessage == null) {
         setState(() {
-          _errorMessage = "Map is taking too long to load. Please check your internet connection and try again.";
+          _errorMessage =
+              "Map is taking too long to load. Please check your internet connection and try again.";
         });
       }
     });
@@ -63,18 +68,19 @@ class _WorldMapPageState extends State<WorldMapPage> {
   /// Checks both Flutter-level and native-level token configuration
   void _verifyTokenInNativeConfig() {
     final token = dotenv.env["MAPBOX_PUBLIC_TOKEN"];
-    
+
     if (token == null || token.isEmpty) {
       return; // Already handled by _validateMapboxToken
     }
-    
+
     // Verify token is set globally in Flutter
     try {
       // This should have been set in main.dart, but verify it's accessible
       debugPrint('🔍 Verifying Mapbox token configuration...');
       debugPrint('  - Token from .env: ${token.substring(0, 10)}...');
       debugPrint('  - Token length: ${token.length}');
-      debugPrint('  - Token format: ${token.startsWith("pk.") ? "Valid (public token)" : "Invalid"}');
+      debugPrint(
+          '  - Token format: ${token.startsWith("pk.") ? "Valid (public token)" : "Invalid"}');
     } catch (e) {
       debugPrint('⚠️ Error verifying token: $e');
     }
@@ -83,7 +89,7 @@ class _WorldMapPageState extends State<WorldMapPage> {
   /// Validates that the Mapbox token is properly configured
   void _validateMapboxToken() {
     final token = dotenv.env["MAPBOX_PUBLIC_TOKEN"];
-    
+
     if (token == null || token.isEmpty) {
       setState(() {
         _errorMessage = "MAPBOX_PUBLIC_TOKEN not found in .env file";
@@ -93,7 +99,8 @@ class _WorldMapPageState extends State<WorldMapPage> {
 
     if (!token.startsWith("pk.")) {
       setState(() {
-        _errorMessage = "Invalid Mapbox token. Must start with 'pk.' (public token)";
+        _errorMessage =
+            "Invalid Mapbox token. Must start with 'pk.' (public token)";
       });
       return;
     }
@@ -128,9 +135,9 @@ class _WorldMapPageState extends State<WorldMapPage> {
   /// Called when the map is successfully created
   void _onMapCreated(MapboxMap mapboxMapController) async {
     if (!mounted) return;
-    
+
     debugPrint('🗺️ Map created successfully');
-    
+
     setState(() {
       mapboxMap = mapboxMapController;
     });
@@ -139,7 +146,7 @@ class _WorldMapPageState extends State<WorldMapPage> {
     try {
       // Wait a bit for the map to fully initialize
       await Future.delayed(const Duration(milliseconds: 100));
-      
+
       // Access scale bar and compass managers to disable them
       await mapboxMapController.scaleBar.updateSettings(
         ScaleBarSettings(enabled: false),
@@ -147,7 +154,7 @@ class _WorldMapPageState extends State<WorldMapPage> {
       await mapboxMapController.compass.updateSettings(
         CompassSettings(enabled: false),
       );
-      
+
       debugPrint('✅ Disabled scale bar and compass');
     } catch (e) {
       debugPrint('⚠️ Error disabling scale bar/compass: $e');
@@ -211,13 +218,13 @@ class _WorldMapPageState extends State<WorldMapPage> {
 
     // Subsequent loads: clean up halo/shadow artifacts.
     await _removeHaloEffects(style);
-    
+
     // Initialize rectangle drawing controller after style is ready
-    if (_rectangleController == null && currentMap != null) {
+    if (_rectangleController == null) {
       try {
         _rectangleController = RectangleDrawingController();
         await _rectangleController!.init(currentMap);
-        
+
         // Get initial camera state
         final cameraState = await currentMap.getCameraState();
         if (mounted) {
@@ -228,12 +235,11 @@ class _WorldMapPageState extends State<WorldMapPage> {
 
         debugPrint('✅ Rectangle drawing controller initialized');
 // Enable symbol-layer tap detection for selecting rectangles
-
       } catch (e) {
         debugPrint('⚠️ Error initializing rectangle controller: $e');
       }
     }
-    
+
     // Load user polygons when map is ready
     await _loadUserPolygons();
   }
@@ -255,7 +261,8 @@ class _WorldMapPageState extends State<WorldMapPage> {
         'high-color': 'rgba(0, 0, 0, 0)', // No upper-atmosphere glow
         'horizon-blend': 0.0, // Sharp horizon to remove halo
         'space-color': 'rgb(5, 5, 15)', // Darker space backdrop
-        'star-intensity': 0.25, // Dimmer stars (default is 0.35, reduced from 0.85)
+        'star-intensity':
+            0.25, // Dimmer stars (default is 0.35, reduced from 0.85)
       };
 
       await style.setStyleJSON(jsonEncode(decoded));
@@ -283,11 +290,12 @@ class _WorldMapPageState extends State<WorldMapPage> {
         try {
           // Get layer type - check if it's a symbol layer by checking for text properties
           final layerId = layer.id;
-          
+
           // Try to get layer type property to determine if it's a symbol layer
           try {
-            final layerType = await style.getStyleLayerProperty(layerId, 'type');
-            
+            final layerType =
+                await style.getStyleLayerProperty(layerId, 'type');
+
             // Only process symbol layers (which include text layers)
             if (layerType == 'symbol') {
               // Remove text halo width (set to 0)
@@ -324,7 +332,8 @@ class _WorldMapPageState extends State<WorldMapPage> {
                 0.0,
               );
               modifiedCount++;
-              debugPrint('  ✅ Removed halo from layer: $layerId (type unknown)');
+              debugPrint(
+                  '  ✅ Removed halo from layer: $layerId (type unknown)');
             } catch (e2) {
               // Layer doesn't have text-halo-width, skip
             }
@@ -343,7 +352,7 @@ class _WorldMapPageState extends State<WorldMapPage> {
   }
 
   /// Zoom to a specific location on the map
-  /// 
+  ///
   /// [latitude] - Target latitude
   /// [longitude] - Target longitude
   /// [zoom] - Target zoom level (default: 12.0 for city level)
@@ -361,7 +370,8 @@ class _WorldMapPageState extends State<WorldMapPage> {
     }
 
     try {
-      debugPrint('📍 Zooming to location: ($latitude, $longitude) at zoom level $zoom');
+      debugPrint(
+          '📍 Zooming to location: ($latitude, $longitude) at zoom level $zoom');
 
       // Create camera options for the target location
       final cameraOptions = CameraOptions(
@@ -394,55 +404,95 @@ class _WorldMapPageState extends State<WorldMapPage> {
   }
 
   /// Handles map tap events for rectangle placement
-/// Handles map tap events (selection + placement)
-void _onMapTap(MapContentGestureContext ctx) async {
-  if (_rectangleController == null || !_rectangleController!.isInitialized) {
-    return;
-  }
+  /// Handles map tap events (selection + placement)
+  void _onMapTap(MapContentGestureContext ctx) async {
+    if (_rectangleController == null || !_rectangleController!.isInitialized) {
+      return;
+    }
 
-  final tapLng = ctx.point.coordinates.lng;
-  final tapLat = ctx.point.coordinates.lat;
+    final lng = ctx.point.coordinates.lng;
+    final lat = ctx.point.coordinates.lat;
+    final tap = Position(lng, lat);
 
-  // -------------------------------------------
-  // 1) If in placement mode → place rectangle
-  // -------------------------------------------
-  if (_rectangleController!.isPlacementMode) {
-    final position = Position(tapLng, tapLat);
-    await _rectangleController!.placeAt(position);
+    // --- Detect handle tap (start drag) ----
+    final cornerIndex = _rectangleController!.hitTestHandle(tap);
 
-    if (mounted) setState(() {});
-    debugPrint("📍 Rectangle placed at $position");
-    return;
-  }
+    if (cornerIndex != null) {
+      debugPrint("🔵 Handle tapped: waiting for drag...");
+      _waitingForDragStart = true;
+      _activeCornerIndex = cornerIndex;
+      return;
+    }
 
-  // -------------------------------------------
-  // 2) Selection mode (tap anywhere INSIDE polygon)
-  // -------------------------------------------
-  final rect = _rectangleController!.rectangle;
+    // --- Rectangle placement mode ---
+    if (_rectangleController!.isPlacementMode) {
+      await _rectangleController!.placeAt(tap);
+      if (mounted) setState(() {});
+      debugPrint("📍 Rectangle placed at $tap");
+      return;
+    }
 
-  if (rect != null) {
-    final hit = rect.containsPoint(tapLng, tapLat);
+    // --- Normal polygon selection ---
+    final rect = _rectangleController!.rectangle;
 
-    if (hit) {
-     setState(() => _selectedRectangle = rect);
-await _rectangleController!.updateSelectionHighlight(true);
-debugPrint("🎯 Rectangle selected by INSIDE hit: ${rect.id}");
-return;
+    if (rect != null) {
+      final hit = rect.containsPoint(lng, lat);
 
-    } else {
-      if (_selectedRectangle != null) {
-       setState(() => _selectedRectangle = null);
-await _rectangleController!.updateSelectionHighlight(false);
-debugPrint("❌ Rectangle deselected");
-
+      if (hit) {
+        setState(() => _selectedRectangle = rect);
+        await _rectangleController!.updateSelectionHighlight(true);
+        debugPrint("🎯 Rectangle selected by INSIDE hit: ${rect.id}");
+        return;
       }
+
+      setState(() => _selectedRectangle = null);
+      await _rectangleController!.updateSelectionHighlight(false);
+      debugPrint("❌ Rectangle deselected");
+    }
+    // --- Fallback drag end ---
+    if (_isDraggingHandle) {
+      _onDragEndFallback();
+      return;
     }
   }
-}
 
+  void _onScroll(MapContentGestureContext ctx) async {
+    if (_rectangleController == null) return;
 
+    final pos = ctx.point.coordinates;
+    final lng = pos.lng;
+    final lat = pos.lat;
+    final p = Position(lng, lat);
 
+    // --- DRAG START ---
+    if (_waitingForDragStart && !_isDraggingHandle) {
+      debugPrint("🔵 Drag START corner=$_activeCornerIndex");
 
+      _waitingForDragStart = false;
+      _isDraggingHandle = true;
+
+      _rectangleController!.startCornerDrag(_activeCornerIndex!);
+      return;
+    }
+
+    // --- DRAG MOVE ---
+    if (_isDraggingHandle) {
+      await _rectangleController!.updateCornerDrag(p);
+
+      if (mounted) setState(() {});
+      return;
+    }
+  }
+
+  void _onDragEndFallback() {
+    if (!_isDraggingHandle) return;
+
+    debugPrint("🟢 Drag END (fallback via tap)");
+    _isDraggingHandle = false;
+    _activeCornerIndex = null;
+
+    _rectangleController!.endCornerDrag();
+  }
 
   /// Handles camera change events to track zoom level
   void _onCameraChange(CameraChangedEventData data) async {
@@ -474,7 +524,7 @@ debugPrint("❌ Rectangle deselected");
         // Trigger UI rebuild
       });
     }
-    
+
     debugPrint('🎨 Entered rectangle placement mode');
   }
 
@@ -484,13 +534,13 @@ debugPrint("❌ Rectangle deselected");
 
     try {
       await _rectangleController!.clear();
-      
+
       if (mounted) {
         setState(() {
           // Trigger UI rebuild
         });
       }
-      
+
       debugPrint('🗑️ Rectangle deleted');
     } catch (e) {
       debugPrint('❌ Error deleting rectangle: $e');
@@ -500,27 +550,27 @@ debugPrint("❌ Rectangle deselected");
   /// Load user polygons from backend
   Future<void> _loadUserPolygons() async {
     if (_isLoadingPolygons) return;
-    
+
     setState(() {
       _isLoadingPolygons = true;
     });
 
     try {
       final result = await LandService.getUserPolygons();
-      
+
       if (result['success'] == true) {
         final polygonsData = result['polygons'] as List;
         final polygons = polygonsData
             .map((data) => RectangleModel.fromMongoData(data))
             .toList();
-        
+
         setState(() {
           _userPolygons = polygons;
         });
-        
+
         // Display polygons on map
         await _displayUserPolygons();
-        
+
         debugPrint('✅ Loaded ${polygons.length} user polygons');
       } else {
         debugPrint('⚠️ Failed to load polygons: ${result['message']}');
@@ -539,25 +589,24 @@ debugPrint("❌ Rectangle deselected");
   /// Display all user polygons on the map
   Future<void> _displayUserPolygons() async {
     if (mapboxMap == null || _userPolygons.isEmpty) return;
-    
+
     try {
       // Create a FeatureCollection from all polygons
-      final features = _userPolygons
-          .map((polygon) => polygon.toGeoJsonFeature())
-          .toList();
-      
+      final features =
+          _userPolygons.map((polygon) => polygon.toGeoJsonFeature()).toList();
+
       final featureCollection = {
         'type': 'FeatureCollection',
         'features': features,
       };
-      
+
       // Use a separate source for user polygons
       const sourceId = 'user-polygons-source';
       const fillLayerId = 'user-polygons-fill-layer';
       const lineLayerId = 'user-polygons-line-layer';
-      
+
       final style = mapboxMap!.style;
-      
+
       // Add source
       try {
         await style.addSource(GeoJsonSource(
@@ -572,7 +621,7 @@ debugPrint("❌ Rectangle deselected");
           jsonEncode(featureCollection),
         );
       }
-      
+
       // Add fill layer
       try {
         await style.addLayer(
@@ -586,7 +635,7 @@ debugPrint("❌ Rectangle deselected");
       } catch (e) {
         // Layer might already exist
       }
-      
+
       // Add line layer
       try {
         await style.addLayer(
@@ -600,7 +649,7 @@ debugPrint("❌ Rectangle deselected");
       } catch (e) {
         // Layer might already exist
       }
-      
+
       debugPrint('✅ Displayed ${_userPolygons.length} user polygons on map');
     } catch (e) {
       debugPrint('❌ Error displaying polygons: $e');
@@ -613,21 +662,22 @@ debugPrint("❌ Rectangle deselected");
       debugPrint('⚠️ No rectangle to save');
       return;
     }
-    
+
     final rectangle = _rectangleController!.rectangle!;
-    final geoJson = rectangle.toGeoJsonFeature()['geometry'] as Map<String, dynamic>;
-    
+    final geoJson =
+        rectangle.toGeoJsonFeature()['geometry'] as Map<String, dynamic>;
+
     try {
       final result = await LandService.savePolygon(
         geometry: geoJson,
         areaInAcres: rectangle.areaInAcres,
         name: 'My Polygon ${DateTime.now().toString().substring(0, 10)}',
       );
-      
+
       if (result['success'] == true) {
         // Reload polygons to get the updated list
         await _loadUserPolygons();
-        
+
         // Show success message
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -637,7 +687,7 @@ debugPrint("❌ Rectangle deselected");
             ),
           );
         }
-        
+
         debugPrint('✅ Polygon saved successfully');
       } else {
         if (mounted) {
@@ -666,9 +716,9 @@ debugPrint("❌ Rectangle deselected");
   /// Extracts detailed error message from MapLoadingErrorEventData
   void _onMapError(Object error) {
     _loadingTimeout?.cancel();
-    
+
     String errorMessage = "Failed to initialize map";
-    
+
     // Try to extract detailed error message from MapLoadingErrorEventData
     try {
       // MapLoadingErrorEventData has a 'message' property
@@ -676,15 +726,18 @@ debugPrint("❌ Rectangle deselected");
       final errorString = error.toString();
       debugPrint('❌ Map creation error (full): $errorString');
       debugPrint('❌ Map creation error (type): ${error.runtimeType}');
-      
+
       // Try to extract message if it's MapLoadingErrorEventData
       if (errorString.contains('message:')) {
         // Extract message from the error object
-        final messageMatch = RegExp(r'message:\s*([^\n,}]+)').firstMatch(errorString);
+        final messageMatch =
+            RegExp(r'message:\s*([^\n,}]+)').firstMatch(errorString);
         if (messageMatch != null) {
-          errorMessage = "Failed to initialize map: ${messageMatch.group(1)?.trim()}";
+          errorMessage =
+              "Failed to initialize map: ${messageMatch.group(1)?.trim()}";
         } else {
-          errorMessage = "Failed to initialize map. Check your internet connection and Mapbox token configuration.";
+          errorMessage =
+              "Failed to initialize map. Check your internet connection and Mapbox token configuration.";
         }
       } else {
         // Try to get more details using reflection-like approach
@@ -693,16 +746,18 @@ debugPrint("❌ Rectangle deselected");
       }
     } catch (e) {
       debugPrint('❌ Error extracting error message: $e');
-      errorMessage = "Failed to initialize map. Please check your internet connection and try again.";
+      errorMessage =
+          "Failed to initialize map. Please check your internet connection and try again.";
     }
-    
+
     // Additional debugging
     final token = dotenv.env["MAPBOX_PUBLIC_TOKEN"];
     debugPrint('🔍 Debug info:');
     debugPrint('  - Token exists: ${token != null && token.isNotEmpty}');
-    debugPrint('  - Token starts with pk.: ${token?.startsWith("pk.") ?? false}');
+    debugPrint(
+        '  - Token starts with pk.: ${token?.startsWith("pk.") ?? false}');
     debugPrint('  - Token length: ${token?.length ?? 0}');
-    
+
     if (mounted) {
       setState(() {
         _errorMessage = errorMessage;
@@ -756,7 +811,8 @@ debugPrint("❌ Rectangle deselected");
                   _loadingTimeout = Timer(const Duration(seconds: 15), () {
                     if (mounted && !_isMapReady && _errorMessage == null) {
                       setState(() {
-                        _errorMessage = "Map is taking too long to load. Please check your internet connection and try again.";
+                        _errorMessage =
+                            "Map is taking too long to load. Please check your internet connection and try again.";
                       });
                     }
                   });
@@ -764,7 +820,8 @@ debugPrint("❌ Rectangle deselected");
                 icon: const Icon(Icons.refresh),
                 label: const Text('Retry'),
                 style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                 ),
               ),
               const SizedBox(height: 16),
@@ -783,9 +840,12 @@ debugPrint("❌ Rectangle deselected");
                             ),
                       ),
                       const SizedBox(height: 8),
-                      _buildTroubleshootingTip('1. Check your internet connection'),
-                      _buildTroubleshootingTip('2. Verify Mapbox token in assets/.env'),
-                      _buildTroubleshootingTip('3. Ensure token is in android/gradle.properties'),
+                      _buildTroubleshootingTip(
+                          '1. Check your internet connection'),
+                      _buildTroubleshootingTip(
+                          '2. Verify Mapbox token in assets/.env'),
+                      _buildTroubleshootingTip(
+                          '3. Ensure token is in android/gradle.properties'),
                       _buildTroubleshootingTip('4. Try restarting the app'),
                     ],
                   ),
@@ -818,6 +878,7 @@ debugPrint("❌ Rectangle deselected");
           onMapLoadErrorListener: _onMapError,
           onTapListener: _onMapTap,
           onCameraChangeListener: _onCameraChange,
+          onScrollListener: _onScroll,
           cameraOptions: CameraOptions(
             center: Point(
               coordinates: Position(0.0, 0.0), // Center of the world
@@ -898,4 +959,3 @@ debugPrint("❌ Rectangle deselected");
     super.dispose();
   }
 }
-

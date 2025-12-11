@@ -52,14 +52,15 @@ class RectangleModel {
     final coords = (geoJson['coordinates'][0] as List)
         .map((coord) => Position(coord[0].toDouble(), coord[1].toDouble()))
         .toList();
-    
+
     final mongoId = data['id'] ?? data['_id'];
     return RectangleModel(
-      id: mongoId?.toString() ?? DateTime.now().microsecondsSinceEpoch.toString(),
+      id: mongoId?.toString() ??
+          DateTime.now().microsecondsSinceEpoch.toString(),
       mongoId: mongoId?.toString(),
       coordinates: coords,
       areaInAcres: (data['areaInAcres'] as num).toDouble(),
-      createdAt: data['createdAt'] != null 
+      createdAt: data['createdAt'] != null
           ? DateTime.parse(data['createdAt'])
           : DateTime.now(),
     );
@@ -77,31 +78,31 @@ class RectangleModel {
       id: id ?? this.id,
       mongoId: mongoId ?? this.mongoId,
       coordinates: GeometryUtils.ensureClosedPolygon(updatedCoords),
-      areaInAcres: areaInAcres ?? AreaCalculator.calculateAreaInAcres(updatedCoords),
+      areaInAcres:
+          areaInAcres ?? AreaCalculator.calculateAreaInAcres(updatedCoords),
       createdAt: createdAt ?? this.createdAt,
     );
   }
-/// Returns true if the given (lng, lat) lies inside the rectangle polygon.
-bool containsPoint(num lng, num lat)
-{
-  bool inside = false;
-  final pts = coordinates;
 
-  for (int i = 0, j = pts.length - 1; i < pts.length; j = i++) {
-    final xi = pts[i].lng;
-    final yi = pts[i].lat;
-    final xj = pts[j].lng;
-    final yj = pts[j].lat;
+  /// Returns true if the given (lng, lat) lies inside the rectangle polygon.
+  bool containsPoint(num lng, num lat) {
+    bool inside = false;
+    final pts = coordinates;
 
-    final intersect =
-        ((yi > lat) != (yj > lat)) &&
-        (lng < (xj - xi) * (lat - yi) / (yj - yi + 0.00000001) + xi);
+    for (int i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      final xi = pts[i].lng;
+      final yi = pts[i].lat;
+      final xj = pts[j].lng;
+      final yj = pts[j].lat;
 
-    if (intersect) inside = !inside;
+      final intersect = ((yi > lat) != (yj > lat)) &&
+          (lng < (xj - xi) * (lat - yi) / (yj - yi + 0.00000001) + xi);
+
+      if (intersect) inside = !inside;
+    }
+
+    return inside;
   }
-
-  return inside;
-}
 
   /// GeoJSON feature representation for map layers.
   Map<String, dynamic> toGeoJsonFeature() {
@@ -123,7 +124,4 @@ bool containsPoint(num lng, num lat)
 
   /// Corner-only list (excludes closing point).
   List<Position> get corners => coordinates.take(4).toList(growable: false);
-
-
 }
-
