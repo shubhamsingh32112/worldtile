@@ -415,9 +415,15 @@ class _WorldMapPageState extends State<WorldMapPage> {
     final tap = Position(lng, lat);
 
     // --- Detect handle tap (start drag) ----
-    final cornerIndex = _rectangleController!.hitTestHandle(tap);
+    final cornerIndex = await _rectangleController!.hitTestHandlePixel(tap);
 
+// Prevent resizing unless rectangle is selected
     if (cornerIndex != null) {
+      if (_selectedRectangle == null) {
+        debugPrint("❌ Ignored handle tap — rectangle not selected");
+        return;
+      }
+
       debugPrint("🔵 Handle tapped: waiting for drag...");
       _waitingForDragStart = true;
       _activeCornerIndex = cornerIndex;
@@ -440,13 +446,24 @@ class _WorldMapPageState extends State<WorldMapPage> {
 
       if (hit) {
         setState(() => _selectedRectangle = rect);
+
         await _rectangleController!.updateSelectionHighlight(true);
+        await _rectangleController!.setHandlesVisible(true);
+
+        // Disable map movement when rectangle is selected
+        await _disableMapGestures();
+
         debugPrint("🎯 Rectangle selected by INSIDE hit: ${rect.id}");
         return;
       }
 
       setState(() => _selectedRectangle = null);
+
+// unhighlight + hide handles
       await _rectangleController!.updateSelectionHighlight(false);
+      await _rectangleController!.setHandlesVisible(false);
+      await _enableMapGestures();
+
       debugPrint("❌ Rectangle deselected");
     }
     // --- Fallback drag end ---
@@ -471,6 +488,8 @@ class _WorldMapPageState extends State<WorldMapPage> {
       _waitingForDragStart = false;
       _isDraggingHandle = true;
 
+      await _disableMapGestures(); // 👉 STOP MAP MOVING
+
       _rectangleController!.startCornerDrag(_activeCornerIndex!);
       return;
     }
@@ -484,7 +503,7 @@ class _WorldMapPageState extends State<WorldMapPage> {
     }
   }
 
-  void _onDragEndFallback() {
+  Future<void> _onDragEndFallback() async {
     if (!_isDraggingHandle) return;
 
     debugPrint("🟢 Drag END (fallback via tap)");
@@ -492,10 +511,18 @@ class _WorldMapPageState extends State<WorldMapPage> {
     _activeCornerIndex = null;
 
     _rectangleController!.endCornerDrag();
+    await _enableMapGestures(); // 👉 MAP CAN MOVE AGAIN
+
+// Keep handles visible ONLY if still selected
+    if (_selectedRectangle != null) {
+      await _rectangleController!.setHandlesVisible(true);
+    } else {
+      await _rectangleController!.setHandlesVisible(false);
+    }
   }
 
   /// Handles camera change events to track zoom level
-  void _onCameraChange(CameraChangedEventData data) async {
+  void onCameraChange(CameraChangedEventData data) async {
     if (mapboxMap == null) return;
 
     try {
@@ -511,7 +538,7 @@ class _WorldMapPageState extends State<WorldMapPage> {
   }
 
   /// Handles draw button press to enter placement mode
-  void _onDrawButtonPressed() {
+  void onDrawButtonPressed() {
     if (_rectangleController == null || !_rectangleController!.isInitialized) {
       debugPrint('⚠️ Rectangle controller not initialized');
       return;
@@ -529,11 +556,12 @@ class _WorldMapPageState extends State<WorldMapPage> {
   }
 
   /// Handles rectangle delete action
-  Future<void> _onDeleteRectangle() async {
+  Future<void> onDeleteRectangle() async {
     if (_rectangleController == null) return;
 
     try {
       await _rectangleController!.clear();
+      await _rectangleController!.setHandlesVisible(false);
 
       if (mounted) {
         setState(() {
@@ -545,6 +573,40 @@ class _WorldMapPageState extends State<WorldMapPage> {
     } catch (e) {
       debugPrint('❌ Error deleting rectangle: $e');
     }
+  }
+
+  Future<void> _disableMapGestures() async {
+    if (mapboxMap == null) return;
+
+    await mapboxMap!.gestures.updateSettings(
+      GesturesSettings(
+        scrollEnabled: true, // keep this ON so onScroll fires
+        scrollMode: ScrollMode.HORIZONTAL_AND_VERTICAL, // required
+        rotateEnabled: false,
+        pinchToZoomEnabled: false,
+        quickZoomEnabled: false,
+        doubleTapToZoomInEnabled: false,
+        doubleTouchToZoomOutEnabled: false,
+        pitchEnabled: false,
+      ),
+    );
+  }
+
+  Future<void> _enableMapGestures() async {
+    if (mapboxMap == null) return;
+
+    await mapboxMap!.gestures.updateSettings(
+      GesturesSettings(
+        scrollEnabled: true,
+        scrollMode: ScrollMode.HORIZONTAL_AND_VERTICAL,
+        rotateEnabled: true,
+        pinchToZoomEnabled: true,
+        quickZoomEnabled: true,
+        doubleTapToZoomInEnabled: true,
+        doubleTouchToZoomOutEnabled: true,
+        pitchEnabled: true,
+      ),
+    );
   }
 
   /// Load user polygons from backend
@@ -657,7 +719,7 @@ class _WorldMapPageState extends State<WorldMapPage> {
   }
 
   /// Save the current rectangle as a polygon
-  Future<void> _saveCurrentRectangle() async {
+  Future<void> saveCurrentRectangle() async {
     if (_rectangleController?.rectangle == null) {
       debugPrint('⚠️ No rectangle to save');
       return;
@@ -714,7 +776,7 @@ class _WorldMapPageState extends State<WorldMapPage> {
 
   /// Handles map creation errors
   /// Extracts detailed error message from MapLoadingErrorEventData
-  void _onMapError(Object error) {
+  void onMapError(Object error) {
     _loadingTimeout?.cancel();
 
     String errorMessage = "Failed to initialize map";
@@ -840,13 +902,13 @@ class _WorldMapPageState extends State<WorldMapPage> {
                             ),
                       ),
                       const SizedBox(height: 8),
-                      _buildTroubleshootingTip(
+                      buildTroubleshootingTip(
                           '1. Check your internet connection'),
-                      _buildTroubleshootingTip(
+                      buildTroubleshootingTip(
                           '2. Verify Mapbox token in assets/.env'),
-                      _buildTroubleshootingTip(
+                      buildTroubleshootingTip(
                           '3. Ensure token is in android/gradle.properties'),
-                      _buildTroubleshootingTip('4. Try restarting the app'),
+                      buildTroubleshootingTip('4. Try restarting the app'),
                     ],
                   ),
                 ),
@@ -875,9 +937,9 @@ class _WorldMapPageState extends State<WorldMapPage> {
           key: const ValueKey('worldMapWidget'),
           onMapCreated: _onMapCreated,
           onStyleLoadedListener: _onStyleLoaded,
-          onMapLoadErrorListener: _onMapError,
+          onMapLoadErrorListener: onMapError,
           onTapListener: _onMapTap,
-          onCameraChangeListener: _onCameraChange,
+          onCameraChangeListener: onCameraChange,
           onScrollListener: _onScroll,
           cameraOptions: CameraOptions(
             center: Point(
@@ -898,14 +960,14 @@ class _WorldMapPageState extends State<WorldMapPage> {
           DrawRectangleButton(
             currentZoom: _currentZoom,
             isPlacementMode: _rectangleController?.isPlacementMode ?? false,
-            onPressed: _onDrawButtonPressed,
+            onPressed: onDrawButtonPressed,
           ),
         // Rectangle controls (only visible when rectangle exists)
         if (_isMapReady && _rectangleController?.rectangle != null)
           RectangleControls(
             rectangle: _rectangleController!.rectangle,
-            onDelete: _onDeleteRectangle,
-            onSave: _saveCurrentRectangle,
+            onDelete: onDeleteRectangle,
+            onSave: saveCurrentRectangle,
           ),
         // Loading indicator overlay
         if (!_isMapReady)
@@ -930,7 +992,7 @@ class _WorldMapPageState extends State<WorldMapPage> {
   }
 
   /// Builds a troubleshooting tip widget
-  Widget _buildTroubleshootingTip(String text) {
+  Widget buildTroubleshootingTip(String text) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 4.0),
       child: Row(

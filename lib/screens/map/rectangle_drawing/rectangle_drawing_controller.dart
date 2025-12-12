@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'package:worldtile_app/screens/map/rectangle_drawing/rectangle_model.dart';
 import 'package:worldtile_app/theme/app_theme.dart';
+import 'dart:math';
 
 /// Controls rectangle drawing lifecycle and Mapbox style updates.
 ///
@@ -30,6 +31,14 @@ class RectangleDrawingController {
   static const String _handleSourceId = "rectangle-handle-source";
   static const String _handleLayerId = "rectangle-handle-layer";
   int? _draggingCornerIndex; // null = not dragging
+  List<Position>? _dragStartCorners; // snapshot of rectangle at drag start
+  Position? _dragAnchor; // fixed opposite corner
+  final bool _enableResizeAnimation = true;
+  final int _animationFrames = 8; // smoothness
+  final Duration _animationDelay = const Duration(milliseconds: 12);
+  bool _isAnimating = false; // prevents overlapping animations
+  final bool _animateOnDragEnd =
+      true; // enable optional settle animation after drag ends
 
   /// Must be called after the map's style is loaded.
   Future<void> init(MapboxMap mapboxMap) async {
@@ -49,6 +58,13 @@ class RectangleDrawingController {
     _rectangle = RectangleModel.defaultAt(center);
     _placementMode = false;
     await _syncGeoJson();
+  }
+
+  Position _lerpPos(Position a, Position b, double t) {
+    return Position(
+      a.lng + (b.lng - a.lng) * t,
+      a.lat + (b.lat - a.lat) * t,
+    );
   }
 
   /// Move rectangle by a delta (lon/lat).
@@ -80,17 +96,113 @@ class RectangleDrawingController {
   /// Start dragging a specific corner
   void startCornerDrag(int cornerIndex) {
     _draggingCornerIndex = cornerIndex;
+
+    if (_rectangle == null) return;
+
+    // snapshot of corners
+    _dragStartCorners = List<Position>.from(_rectangle!.corners);
+
+    // anchor is the diagonal opposite
+    final anchorIndex = (cornerIndex + 2) % 4;
+    _dragAnchor = _rectangle!.corners[anchorIndex];
   }
 
-  /// Update dragging corner with new map position (preserve rectangle shape)
   Future<void> updateCornerDrag(Position newPos) async {
-    if (_draggingCornerIndex == null || _rectangle == null) return;
-    await _resizeFromCorner(_draggingCornerIndex!, newPos);
+    // Fast path: while dragging, update immediately (no animation)
+    if (_draggingCornerIndex == null ||
+        _rectangle == null ||
+        _dragStartCorners == null ||
+        _dragAnchor == null) return;
+
+    final cornerIndex = _draggingCornerIndex!;
+    final original = _dragStartCorners!;
+    final anchor = _dragAnchor!;
+
+    final dx = newPos.lng - anchor.lng;
+    final dy = newPos.lat - anchor.lat;
+
+    // compute new corners from the drag-start snapshot (so deltas are stable)
+    final updated = List<Position>.from(original);
+
+    switch (cornerIndex) {
+      case 0:
+        updated[0] = newPos;
+        updated[1] = Position(anchor.lng + dx, anchor.lat);
+        updated[3] = Position(anchor.lng, anchor.lat + dy);
+        break;
+      case 1:
+        updated[1] = newPos;
+        updated[0] = Position(anchor.lng + dx, anchor.lat);
+        updated[2] = Position(anchor.lng, anchor.lat + dy);
+        break;
+      case 2:
+        updated[2] = newPos;
+        updated[1] = Position(anchor.lng, anchor.lat + dy);
+        updated[3] = Position(anchor.lng + dx, anchor.lat);
+        break;
+      case 3:
+        updated[3] = newPos;
+        updated[0] = Position(anchor.lng, anchor.lat + dy);
+        updated[2] = Position(anchor.lng + dx, anchor.lat);
+        break;
+    }
+
+    // Close polygon
+    final coords = [...updated, updated[0]];
+
+    // Apply immediately for responsive dragging
+    _rectangle = _rectangle!.copyWith(coordinates: coords);
+    await _syncGeoJson();
   }
 
   /// Stop dragging
   void endCornerDrag() {
+    // capture final target before clearing drag state
+    final finalCorners = _rectangle?.corners;
+
     _draggingCornerIndex = null;
+    _dragStartCorners = null;
+    _dragAnchor = null;
+
+    // Optionally run a quick settle animation from the current displayed corners
+    // to the final computed corners (if there's any difference).
+    if (_animateOnDragEnd &&
+        !_isAnimating &&
+        _mapboxMap != null &&
+        finalCorners != null) {
+      // schedule async animation (don't block caller)
+      _runSettleAnimation(finalCorners);
+    }
+  }
+
+  Future<void> _runSettleAnimation(List<Position> finalCorners) async {
+    if (!_enableResizeAnimation) return;
+    if (_isAnimating) return;
+
+    _isAnimating = true;
+    try {
+      // start = currently visible corners (can be fetched from _rectangle)
+      final startCorners = _rectangle?.corners ?? finalCorners;
+      // ensure length 4
+      if (startCorners.length < 4 || finalCorners.length < 4) return;
+
+      // Do a short animation over _animationFrames frames
+      for (int i = 1; i <= _animationFrames; i++) {
+        final t = i / _animationFrames;
+        final interpolated = List<Position>.generate(4, (idx) {
+          return _lerpPos(startCorners[idx], finalCorners[idx], t);
+        });
+
+        _rectangle = _rectangle!
+            .copyWith(coordinates: [...interpolated, interpolated[0]]);
+        await _syncGeoJson();
+        await Future.delayed(_animationDelay);
+      }
+    } catch (e) {
+      debugPrint('⚠️ _runSettleAnimation failed: $e');
+    } finally {
+      _isAnimating = false;
+    }
   }
 
   /// Highlight rectangle when selected (true) or reset (false)
@@ -124,6 +236,7 @@ class RectangleDrawingController {
         "line-width",
         isSelected ? 3.0 : 2.0,
       );
+      await setHandlesVisible(isSelected);
     } catch (e) {
       debugPrint("⚠️ updateSelectionHighlight failed: $e");
     }
@@ -182,60 +295,6 @@ class RectangleDrawingController {
     }
   }
 
-  /// Resize rectangle keeping opposite corner anchored.
-  /// This ALWAYS keeps 90° angles.
-  Future<void> _resizeFromCorner(int cornerIndex, Position movedCorner) async {
-    _assertInitialized();
-    final rect = _rectangle!;
-    final corners = rect.corners;
-
-    final anchorIndex = (cornerIndex + 2) % 4; // diagonal opposite
-    final anchor = corners[anchorIndex];
-
-    final dx = movedCorner.lng - anchor.lng;
-    final dy = movedCorner.lat - anchor.lat;
-
-    // Compute new other corners assuming rectangle axis-aligned
-    final newCorners = List<Position>.from(corners);
-
-    // cornerIndex is changing, others get recomputed
-    switch (cornerIndex) {
-      case 0:
-        newCorners[0] = movedCorner;
-        newCorners[1] = Position(anchor.lng + dx, anchor.lat);
-        newCorners[3] = Position(anchor.lng, anchor.lat + dy);
-        break;
-
-      case 1:
-        newCorners[1] = movedCorner;
-        newCorners[0] = Position(anchor.lng + dx, anchor.lat);
-        newCorners[2] = Position(anchor.lng, anchor.lat + dy);
-        break;
-
-      case 2:
-        newCorners[2] = movedCorner;
-        newCorners[1] = Position(anchor.lng, anchor.lat + dy);
-        newCorners[3] = Position(anchor.lng + dx, anchor.lat);
-        break;
-
-      case 3:
-        newCorners[3] = movedCorner;
-        newCorners[0] = Position(anchor.lng, anchor.lat + dy);
-        newCorners[2] = Position(anchor.lng + dx, anchor.lat);
-        break;
-    }
-
-    _rectangle = rect.copyWith(coordinates: [
-      newCorners[0],
-      newCorners[1],
-      newCorners[2],
-      newCorners[3],
-      newCorners[0], // closed polygon
-    ]);
-
-    await _syncGeoJson();
-  }
-
   Future<void> _addFillLayerIfMissing(StyleManager style) async {
     try {
       await style.addLayer(
@@ -248,6 +307,22 @@ class RectangleDrawingController {
       );
     } catch (e) {
       if (kDebugMode) debugPrint("Fill layer add skipped/failed: $e");
+    }
+  }
+
+  /// Show or hide the red corner handles
+  Future<void> setHandlesVisible(bool visible) async {
+    final style = _mapboxMap?.style;
+    if (style == null) return;
+
+    try {
+      await style.setStyleLayerProperty(
+        _handleLayerId,
+        "circle-opacity",
+        visible ? 1.0 : 0.0,
+      );
+    } catch (e) {
+      debugPrint("⚠️ Failed updating handle visibility: $e");
     }
   }
 
@@ -294,7 +369,7 @@ class RectangleDrawingController {
   }
 
   Future<void> _addHandleLayerIfMissing(StyleManager style) async {
-    // 1) Add source
+    // 1) Create/ensure GeoJSON source for handle points
     try {
       await style.addSource(
         GeoJsonSource(
@@ -302,21 +377,26 @@ class RectangleDrawingController {
           data: jsonEncode(_emptyFeatureCollection),
         ),
       );
-    } catch (_) {}
+    } catch (_) {
+      // Source may already exist — ignore
+    }
 
-    // 2) Add SymbolLayer for handles
+    // 2) Add CircleLayer for crisp red corner dots
     try {
       await style.addLayer(
-        SymbolLayer(
+        CircleLayer(
           id: _handleLayerId,
           sourceId: _handleSourceId,
-          iconImage: "marker-15",
-          iconSize: 1.0,
-          iconColor: 0xFFFF0000, // <-- FIXED
+          // red dot visual
+          circleColor: 0xFFFF0000, // red
+          circleRadius: 6.0, // size in pixels
+          circleStrokeColor: 0xFFFFFFFF, // white border
+          circleStrokeWidth: 1.5,
+          circleOpacity: 0.0, // hidden until selected
         ),
       );
     } catch (e) {
-      debugPrint("Handle layer add skipped/failed: $e");
+      debugPrint("⚠️ Failed adding handle CircleLayer: $e");
     }
   }
 
@@ -396,6 +476,9 @@ class RectangleDrawingController {
           "data",
           jsonEncode(_emptyFeatureCollection),
         );
+
+        await setHandlesVisible(false);
+        return;
       } else {
         final corners = _rectangle!.corners;
 
@@ -429,17 +512,31 @@ class RectangleDrawingController {
     }
   }
 
-  /// Returns the corner index if tap is near handle, else null.
-  int? hitTestHandle(Position tap, {double threshold = 0.0002}) {
-    if (_rectangle == null) return null;
+  /// Pixel-accurate hit test for corner handles.
+  /// Returns index 0–3 if inside 15px radius, else null.
+  Future<int?> hitTestHandlePixel(Position tap) async {
+    if (_rectangle == null || _mapboxMap == null) return null;
 
+    final map = _mapboxMap!;
     final corners = _rectangle!.corners;
 
+    // Convert tap to pixel coordinates
+    final tapPx = await map.pixelForCoordinate(
+      Point(coordinates: tap),
+    );
+
     for (int i = 0; i < corners.length; i++) {
-      final c = corners[i];
-      final dx = (tap.lng - c.lng).abs();
-      final dy = (tap.lat - c.lat).abs();
-      if (dx < threshold && dy < threshold) return i;
+      final cornerPx = await map.pixelForCoordinate(
+        Point(coordinates: corners[i]),
+      );
+
+      final dx = (tapPx.x - cornerPx.x);
+      final dy = (tapPx.y - cornerPx.y);
+      final dist = sqrt(dx * dx + dy * dy);
+
+      if (dist < 15) {
+        return i;
+      }
     }
 
     return null;
