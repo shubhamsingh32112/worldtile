@@ -259,17 +259,32 @@ class LandService {
     required double areaInAcres,
     String? name,
     String? description,
+    // New rectangle fields
+    Map<String, double>? center,
+    double? widthMeters,
+    double? heightMeters,
+    double? rotationDegrees,
+    double? areaInMetersSquared,
+    List<Map<String, dynamic>>? areaIncreaseHistory,
   }) async {
     try {
+      final body = <String, dynamic>{
+        'geometry': geometry,
+        'areaInAcres': areaInAcres,
+        if (name != null) 'name': name,
+        if (description != null) 'description': description,
+        if (center != null) 'center': center,
+        if (widthMeters != null) 'widthMeters': widthMeters,
+        if (heightMeters != null) 'heightMeters': heightMeters,
+        if (rotationDegrees != null) 'rotationDegrees': rotationDegrees,
+        if (areaInMetersSquared != null) 'areaInMetersSquared': areaInMetersSquared,
+        if (areaIncreaseHistory != null) 'areaIncreaseHistory': areaIncreaseHistory,
+      };
+
       final response = await http.post(
         Uri.parse('$baseUrl/polygons'),
         headers: await _getHeaders(),
-        body: jsonEncode({
-          'geometry': geometry,
-          'areaInAcres': areaInAcres,
-          if (name != null) 'name': name,
-          if (description != null) 'description': description,
-        }),
+        body: jsonEncode(body),
       );
 
       final data = jsonDecode(response.body);

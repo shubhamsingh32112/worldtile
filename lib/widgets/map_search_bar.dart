@@ -95,16 +95,27 @@ class _MapSearchBarState extends State<MapSearchBar> {
   }
 
   Future<void> _performSearch(String query) async {
-    if (query.trim().isEmpty) return;
+    final trimmedQuery = query.trim();
+    if (trimmedQuery.isEmpty) return;
+
+    // Store the query we're searching for to avoid race conditions
+    final searchQuery = trimmedQuery;
 
     setState(() {
       _isSearching = true;
       _errorMessage = null;
     });
 
-    final result = await GeocodingService.searchPlaces(query, limit: 5);
+    final result = await GeocodingService.searchPlaces(searchQuery, limit: 5);
 
     if (!mounted) return;
+    
+    // Verify the query hasn't changed while we were searching
+    final currentQuery = _searchController.text.trim();
+    if (currentQuery != searchQuery) {
+      // Query changed, ignore these results
+      return;
+    }
 
     setState(() {
       _isSearching = false;
@@ -147,6 +158,7 @@ class _MapSearchBarState extends State<MapSearchBar> {
   @override
   Widget build(BuildContext context) {
     return Stack(
+      clipBehavior: Clip.none,
       children: [
         // Search bar
         Container(
@@ -193,8 +205,27 @@ class _MapSearchBarState extends State<MapSearchBar> {
                 vertical: 16,
               ),
             ),
-            onSubmitted: (value) {
+            onSubmitted: (value) async {
+              final query = value.trim();
+              if (query.isEmpty) return;
+              
+              // If there are existing results and query matches, use first result
               if (_searchResults.isNotEmpty) {
+                _selectPlace(_searchResults.first);
+                return;
+              }
+              
+              // Otherwise, trigger immediate search and wait for results
+              if (_isSearching) {
+                // Wait for current search to complete
+                await Future.delayed(const Duration(milliseconds: 600));
+              } else {
+                // Trigger immediate search
+                await _performSearch(query);
+              }
+              
+              // Select first result if available
+              if (mounted && _searchResults.isNotEmpty) {
                 _selectPlace(_searchResults.first);
               }
             },
@@ -207,7 +238,7 @@ class _MapSearchBarState extends State<MapSearchBar> {
             left: 16,
             right: 16,
             child: Material(
-              elevation: 8,
+              elevation: 24, // Higher elevation to appear above map
               borderRadius: BorderRadius.circular(12),
               color: Colors.transparent,
               child: Container(

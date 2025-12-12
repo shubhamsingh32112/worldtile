@@ -3,17 +3,21 @@ import 'package:worldtile_app/screens/map/rectangle_drawing/area_calculator.dart
 import 'package:worldtile_app/screens/map/rectangle_drawing/rectangle_model.dart';
 import 'package:worldtile_app/theme/app_theme.dart';
 
-/// Overlay controls showing rectangle area with delete and save actions.
+/// Overlay controls showing rectangle area with delete, save, and resize actions.
 class RectangleControls extends StatelessWidget {
   final RectangleModel? rectangle;
   final VoidCallback onDelete;
   final VoidCallback? onSave;
+  final VoidCallback? onResize;
+  final bool isResizeModeActive;
 
   const RectangleControls({
     super.key,
     required this.rectangle,
     required this.onDelete,
     this.onSave,
+    this.onResize,
+    this.isResizeModeActive = false,
   });
 
   @override
@@ -91,6 +95,16 @@ class RectangleControls extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
+          if (onResize != null) ...[
+            _buildCompactButton(
+              context: context,
+              onPressed: onResize!,
+              icon: isResizeModeActive ? Icons.close : Icons.open_with,
+              label: isResizeModeActive ? 'Done' : 'Resize',
+              color: isResizeModeActive ? AppTheme.accentColor : AppTheme.primaryColor,
+            ),
+            const SizedBox(width: 4),
+          ],
           if (onSave != null) ...[
             _buildCompactButton(
               context: context,
@@ -141,6 +155,14 @@ class RectangleControls extends StatelessWidget {
           spacing: 8,
           runSpacing: 4,
           children: [
+            if (onResize != null)
+              _buildCompactButton(
+                context: context,
+                onPressed: onResize!,
+                icon: isResizeModeActive ? Icons.close : Icons.open_with,
+                label: isResizeModeActive ? 'Done' : 'Resize',
+                color: isResizeModeActive ? AppTheme.accentColor : AppTheme.primaryColor,
+              ),
             if (onSave != null)
               _buildCompactButton(
                 context: context,

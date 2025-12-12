@@ -34,10 +34,14 @@ class _WorldMapPageState extends State<WorldMapPage> {
   Timer? _loadingTimeout;
   bool _hasAppliedCustomFog = false;
   RectangleModel? _selectedRectangle;
+// --- Resize mode state ---
+  bool _isResizeModeActive = false; // Only allow resizing when this is true
 // --- Dragging state ---
   bool _isDraggingHandle = false;
   int? _activeCornerIndex;
   bool _waitingForDragStart = false;
+  CameraState? _cameraStateBeforeDrag; // Track camera position to prevent movement during drag
+  Offset? _lastPanPosition; // Track last pan position for smooth drag
 
   // Rectangle drawing state
   RectangleDrawingController? _rectangleController;
@@ -355,12 +359,12 @@ class _WorldMapPageState extends State<WorldMapPage> {
   ///
   /// [latitude] - Target latitude
   /// [longitude] - Target longitude
-  /// [zoom] - Target zoom level (default: 12.0 for city level)
+  /// [zoom] - Target zoom level (default: 17y.0 for city level)
   /// [duration] - Animation duration in milliseconds (default: 1500)
   Future<void> _zoomToLocation(
     double latitude,
     double longitude, {
-    double zoom = 12.0,
+    double zoom = 17.0,
     int duration = 1500,
   }) async {
     final currentMap = mapboxMap;
@@ -403,6 +407,34 @@ class _WorldMapPageState extends State<WorldMapPage> {
     _zoomToLocation(latitude, longitude);
   }
 
+  /// Resets map to default view (world view, zoom 0, center at 0,0)
+  Future<void> _resetMapToDefault() async {
+    if (mapboxMap == null) return;
+
+    try {
+      debugPrint('🔄 Resetting map to default view');
+
+      final cameraOptions = CameraOptions(
+        center: Point(
+          coordinates: Position(0.0, 0.0), // Center of the world
+        ),
+        zoom: 0.0, // Full world view
+      );
+
+      await mapboxMap!.flyTo(
+        cameraOptions,
+        MapAnimationOptions(
+          duration: 1000,
+          startDelay: 0,
+        ),
+      );
+
+      debugPrint('✅ Map reset to default view');
+    } catch (e) {
+      debugPrint('❌ Error resetting map: $e');
+    }
+  }
+
   /// Handles map tap events for rectangle placement
   /// Handles map tap events (selection + placement)
   void _onMapTap(MapContentGestureContext ctx) async {
@@ -417,16 +449,29 @@ class _WorldMapPageState extends State<WorldMapPage> {
     // --- Detect handle tap (start drag) ----
     final cornerIndex = await _rectangleController!.hitTestHandlePixel(tap);
 
-// Prevent resizing unless rectangle is selected
+// Prevent resizing unless rectangle is selected AND resize mode is active
     if (cornerIndex != null) {
       if (_selectedRectangle == null) {
         debugPrint("❌ Ignored handle tap — rectangle not selected");
         return;
       }
 
+      if (!_isResizeModeActive) {
+        debugPrint("❌ Ignored handle tap — resize mode not active");
+        return;
+      }
+
       debugPrint("🔵 Handle tapped: waiting for drag...");
       _waitingForDragStart = true;
       _activeCornerIndex = cornerIndex;
+      
+      // Camera state should already be saved when resize mode was activated
+      // But ensure it's saved just in case
+      if (mapboxMap != null && _cameraStateBeforeDrag == null) {
+        _cameraStateBeforeDrag = await mapboxMap!.getCameraState();
+      }
+      
+      // onScroll will fire even with scrolling disabled, and we'll use screen coordinates
       return;
     }
 
@@ -445,19 +490,31 @@ class _WorldMapPageState extends State<WorldMapPage> {
       final hit = rect.containsPoint(lng, lat);
 
       if (hit) {
-        setState(() => _selectedRectangle = rect);
+        setState(() {
+          _selectedRectangle = rect;
+          _isResizeModeActive = false; // Reset resize mode on new selection
+        });
 
         await _rectangleController!.updateSelectionHighlight(true);
-        await _rectangleController!.setHandlesVisible(true);
+        // Only show handles if resize mode is active
+        await _rectangleController!.setHandlesVisible(_isResizeModeActive);
 
         // Disable map movement when rectangle is selected
         await _disableMapGestures();
+        
+        // If resize mode is active, save camera state to lock it
+        if (_isResizeModeActive && mapboxMap != null) {
+          _cameraStateBeforeDrag = await mapboxMap!.getCameraState();
+        }
 
         debugPrint("🎯 Rectangle selected by INSIDE hit: ${rect.id}");
         return;
       }
 
-      setState(() => _selectedRectangle = null);
+      setState(() {
+        _selectedRectangle = null;
+        _isResizeModeActive = false; // Reset resize mode on deselection
+      });
 
 // unhighlight + hide handles
       await _rectangleController!.updateSelectionHighlight(false);
@@ -474,32 +531,87 @@ class _WorldMapPageState extends State<WorldMapPage> {
   }
 
   void _onScroll(MapContentGestureContext ctx) async {
-    if (_rectangleController == null) return;
+    // Don't use scroll events for drag - we'll use GestureDetector instead
+    // This method is kept for non-resize mode interactions
+    if (!_isResizeModeActive) {
+      // Handle normal map scrolling if needed
+      return;
+    }
+  }
 
-    final pos = ctx.point.coordinates;
-    final lng = pos.lng;
-    final lat = pos.lat;
-    final p = Position(lng, lat);
-
-    // --- DRAG START ---
-    if (_waitingForDragStart && !_isDraggingHandle) {
-      debugPrint("🔵 Drag START corner=$_activeCornerIndex");
-
-      _waitingForDragStart = false;
-      _isDraggingHandle = true;
-
-      await _disableMapGestures(); // 👉 STOP MAP MOVING
-
-      _rectangleController!.startCornerDrag(_activeCornerIndex!);
+  /// Handle pan start for corner dragging (called from GestureDetector)
+  void _onPanStart(DragStartDetails details) async {
+    if (!_isResizeModeActive || !_waitingForDragStart || mapboxMap == null) {
       return;
     }
 
-    // --- DRAG MOVE ---
-    if (_isDraggingHandle) {
+    debugPrint("🔵 Pan START corner=$_activeCornerIndex");
+
+    _waitingForDragStart = false;
+    _isDraggingHandle = true;
+    _lastPanPosition = details.localPosition;
+
+    // Ensure camera state is saved
+    if (_cameraStateBeforeDrag == null) {
+      _cameraStateBeforeDrag = await mapboxMap!.getCameraState();
+    }
+
+    // Start corner drag
+    _rectangleController!.startCornerDrag(_activeCornerIndex!);
+  }
+
+  /// Handle pan update for corner dragging (called from GestureDetector)
+  void _onPanUpdate(DragUpdateDetails details) async {
+    if (!_isDraggingHandle || mapboxMap == null || _rectangleController == null) {
+      return;
+    }
+
+    // Convert screen coordinates to map coordinates
+    final screenPos = ScreenCoordinate(
+      x: details.localPosition.dx,
+      y: details.localPosition.dy,
+    );
+
+    try {
+      final mapCoord = await mapboxMap!.coordinateForPixel(screenPos);
+      final p = mapCoord.coordinates;
+
+      // Update rectangle corner position
       await _rectangleController!.updateCornerDrag(p);
 
-      if (mounted) setState(() {});
+      if (mounted) {
+        setState(() {
+          _lastPanPosition = details.localPosition;
+        });
+      }
+    } catch (e) {
+      debugPrint('⚠️ Error updating corner drag: $e');
+    }
+  }
+
+  /// Handle pan end for corner dragging (called from GestureDetector)
+  Future<void> _onPanEnd(DragEndDetails details) async {
+    if (!_isDraggingHandle) {
       return;
+    }
+
+    debugPrint("🟢 Pan END");
+
+    _isDraggingHandle = false;
+    _activeCornerIndex = null;
+    _waitingForDragStart = false;
+    _lastPanPosition = null;
+
+    _rectangleController!.endCornerDrag();
+
+    // Restore gesture state
+    if (_selectedRectangle != null) {
+      await _disableMapGestures();
+      await _rectangleController!.setHandlesVisible(_isResizeModeActive);
+    } else {
+      await _enableMapGestures();
+      await _rectangleController!.setHandlesVisible(false);
+      _isResizeModeActive = false;
     }
   }
 
@@ -507,24 +619,19 @@ class _WorldMapPageState extends State<WorldMapPage> {
     if (!_isDraggingHandle) return;
 
     debugPrint("🟢 Drag END (fallback via tap)");
-    _isDraggingHandle = false;
-    _activeCornerIndex = null;
-
-    _rectangleController!.endCornerDrag();
-    await _enableMapGestures(); // 👉 MAP CAN MOVE AGAIN
-
-// Keep handles visible ONLY if still selected
-    if (_selectedRectangle != null) {
-      await _rectangleController!.setHandlesVisible(true);
-    } else {
-      await _rectangleController!.setHandlesVisible(false);
-    }
+    
+    // Use the same cleanup as pan end
+    await _onPanEnd(DragEndDetails());
   }
 
   /// Handles camera change events to track zoom level
+  /// In resize mode, camera movement is prevented by disabling scroll gestures
+  /// No need to revert camera - gestures are disabled so it can't move
   void onCameraChange(CameraChangedEventData data) async {
     if (mapboxMap == null) return;
 
+    // In resize mode, scrolling is disabled so camera shouldn't move
+    // No need to revert - just track zoom level
     try {
       final cameraState = await mapboxMap!.getCameraState();
       if (mounted) {
@@ -565,9 +672,12 @@ class _WorldMapPageState extends State<WorldMapPage> {
 
       if (mounted) {
         setState(() {
-          // Trigger UI rebuild
+          _selectedRectangle = null;
+          _isResizeModeActive = false;
         });
       }
+
+      await _enableMapGestures();
 
       debugPrint('🗑️ Rectangle deleted');
     } catch (e) {
@@ -575,13 +685,59 @@ class _WorldMapPageState extends State<WorldMapPage> {
     }
   }
 
+  /// Handles resize button press to toggle resize mode
+  Future<void> onResizeButtonPressed() async {
+    if (_rectangleController == null || _selectedRectangle == null) {
+      debugPrint('⚠️ Cannot toggle resize mode: no rectangle selected');
+      return;
+    }
+
+    setState(() {
+      _isResizeModeActive = !_isResizeModeActive;
+    });
+
+    // Show/hide handles based on resize mode
+    await _rectangleController!.setHandlesVisible(_isResizeModeActive);
+
+    if (_isResizeModeActive) {
+      // Entering resize mode: save and lock camera state
+      if (mapboxMap != null) {
+        _cameraStateBeforeDrag = await mapboxMap!.getCameraState();
+        // Ensure gestures are disabled to prevent map movement
+        await _disableMapGestures();
+      }
+      debugPrint('🔧 Resize mode activated - map movement locked');
+    } else {
+      // Exiting resize mode: clear any pending drag state and unlock camera
+      if (_isDraggingHandle || _waitingForDragStart) {
+        await _onDragEndFallback();
+      }
+      _cameraStateBeforeDrag = null;
+      
+      // Restore gesture state based on selection
+      if (_selectedRectangle != null) {
+        // Rectangle is still selected, keep gestures disabled
+        await _disableMapGestures();
+      } else {
+        // Rectangle is not selected, enable all gestures
+        await _enableMapGestures();
+      }
+      debugPrint('✅ Resize mode deactivated - map movement unlocked');
+    }
+  }
+
+  /// Disable map gestures when rectangle is selected
+  /// When resize mode is active, disable ALL gestures to prevent map movement
+  /// We use Flutter's GestureDetector for drag handling instead
   Future<void> _disableMapGestures() async {
     if (mapboxMap == null) return;
 
+    // In resize mode, disable scrolling completely to prevent map movement
+    // We handle drag using Flutter's GestureDetector instead
     await mapboxMap!.gestures.updateSettings(
       GesturesSettings(
-        scrollEnabled: true, // keep this ON so onScroll fires
-        scrollMode: ScrollMode.HORIZONTAL_AND_VERTICAL, // required
+        scrollEnabled: !_isResizeModeActive, // Disable in resize mode
+        scrollMode: ScrollMode.HORIZONTAL_AND_VERTICAL,
         rotateEnabled: false,
         pinchToZoomEnabled: false,
         quickZoomEnabled: false,
@@ -930,29 +1086,42 @@ class _WorldMapPageState extends State<WorldMapPage> {
     // The AppBar is provided by MainScreen parent
     // Note: Access token must be set globally via MapboxOptions.setAccessToken() in main.dart
     // AND configured natively in AndroidManifest.xml and Info.plist
+    final mapWidget = MapWidget(
+      key: const ValueKey('worldMapWidget'),
+      onMapCreated: _onMapCreated,
+      onStyleLoadedListener: _onStyleLoaded,
+      onMapLoadErrorListener: onMapError,
+      onTapListener: _onMapTap,
+      onCameraChangeListener: onCameraChange,
+      onScrollListener: _onScroll,
+      cameraOptions: CameraOptions(
+        center: Point(
+          coordinates: Position(0.0, 0.0), // Center of the world
+        ),
+        zoom: 0.0, // Full world view
+      ),
+      styleUri: "mapbox://styles/arhaan21/cmiz2ed9a003301sacraodhpo",
+    );
+
+    // Always wrap map in GestureDetector to prevent widget tree changes
+    // Conditionally enable gesture handlers based on resize mode
+    final wrappedMap = GestureDetector(
+      onPanStart: _isResizeModeActive ? _onPanStart : null,
+      onPanUpdate: _isResizeModeActive ? _onPanUpdate : null,
+      onPanEnd: _isResizeModeActive ? _onPanEnd : null,
+      behavior: HitTestBehavior.opaque, // Allow gestures to pass through when handlers are null
+      child: mapWidget,
+    );
+
     return Stack(
       children: [
-        // Mapbox Map Widget
-        MapWidget(
-          key: const ValueKey('worldMapWidget'),
-          onMapCreated: _onMapCreated,
-          onStyleLoadedListener: _onStyleLoaded,
-          onMapLoadErrorListener: onMapError,
-          onTapListener: _onMapTap,
-          onCameraChangeListener: onCameraChange,
-          onScrollListener: _onScroll,
-          cameraOptions: CameraOptions(
-            center: Point(
-              coordinates: Position(0.0, 0.0), // Center of the world
-            ),
-            zoom: 0.0, // Full world view
-          ),
-          styleUri: "mapbox://styles/arhaan21/cmiz2ed9a003301sacraodhpo",
-        ),
+        // Mapbox Map Widget (always wrapped in GestureDetector, handlers conditionally enabled)
+        wrappedMap,
         // Search bar overlay
         if (_isMapReady)
           MapSearchBar(
             onPlaceSelected: _onPlaceSelected,
+            onSearchCleared: _resetMapToDefault,
             hintText: 'Search for a place (e.g., rt nagar, Bangalore)',
           ),
         // Rectangle drawing button (only visible when zoomed in enough)
@@ -968,6 +1137,8 @@ class _WorldMapPageState extends State<WorldMapPage> {
             rectangle: _rectangleController!.rectangle,
             onDelete: onDeleteRectangle,
             onSave: saveCurrentRectangle,
+            onResize: onResizeButtonPressed,
+            isResizeModeActive: _isResizeModeActive,
           ),
         // Loading indicator overlay
         if (!_isMapReady)
