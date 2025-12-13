@@ -34,6 +34,7 @@ class _WorldMapPageState extends State<WorldMapPage> {
   String? _errorMessage;
   Timer? _loadingTimeout;
   bool _hasAppliedCustomFog = false;
+  bool _hasPlayedIntroAnimation = false; // Track if intro animation has played
   RectangleModel? _selectedRectangle;
 // --- Resize mode state ---
   bool _isResizeModeActive = false; // Only allow resizing when this is true
@@ -260,7 +261,16 @@ class _WorldMapPageState extends State<WorldMapPage> {
       await _addOpenStatesOutlineLayer(style);
     }
 
+    // Play intro animation: globe spin + zoom to India
+    // This must run after fog is applied and style is fully loaded
+    // Runs only once per page lifecycle
+    // Defer by one microtask to ensure camera is fully attached after style reload
+    if (_hasAppliedCustomFog && !_hasPlayedIntroAnimation) {
+      Future.microtask(() => _playIntroAnimation());
+    }
+
     // Initialize rectangle drawing controller after style is ready
+    // This runs after intro animation to avoid rectangle placement during animation
     if (_rectangleController == null) {
       try {
         _rectangleController = RectangleDrawingController();
@@ -551,6 +561,97 @@ class _WorldMapPageState extends State<WorldMapPage> {
       debugPrint('✅ Map reset to default view');
     } catch (e) {
       debugPrint('❌ Error resetting map: $e');
+    }
+  }
+
+  /// Plays the one-time intro animation: globe spin followed by zoom to India
+  /// This method runs only once per page lifecycle and only after style is fully loaded
+  Future<void> _playIntroAnimation() async {
+    final currentMap = mapboxMap;
+    if (currentMap == null) {
+      debugPrint('⚠️ Cannot play intro animation: Map not ready');
+      return;
+    }
+
+    // Early return if animation already played
+    if (_hasPlayedIntroAnimation) {
+      debugPrint('ℹ️ Intro animation already played, skipping');
+      return;
+    }
+
+    // Mark as played immediately to prevent replay
+    _hasPlayedIntroAnimation = true;
+    debugPrint('🌍 Starting intro animation');
+
+    try {
+      // Get current camera state to determine starting bearing
+      final currentCameraState = await currentMap.getCameraState();
+      final startBearing = currentCameraState.bearing;
+      // Use 300° instead of 360° because globe projection normalizes 360° → 0° (Mapbox quirk)
+      final targetBearing = startBearing + 300.0;
+
+      // Disable all gestures during animation to prevent user interference
+      await _disableAllMapGestures();
+      debugPrint('🔒 Disabled all map gestures for intro animation');
+
+      // Step 1: Globe spin - animate bearing 300° while keeping zoom at 0 and center at (0,0)
+      debugPrint('🔄 Step 1: Globe spin (bearing ${startBearing}° → ${targetBearing}°)');
+      
+      final spinCameraOptions = CameraOptions(
+        center: Point(
+          coordinates: Position(0.0, 0.0), // Keep center at world center
+        ),
+        zoom: 0.0, // Keep zoom at world view
+        bearing: targetBearing, // Rotate 300° (globe projection normalizes 360° to 0°)
+        pitch: currentCameraState.pitch, // Preserve pitch
+      );
+
+      await currentMap.flyTo(
+        spinCameraOptions,
+        MapAnimationOptions(
+          duration: 4500, // ~4-5 seconds for smooth rotation
+          startDelay: 0,
+        ),
+      );
+
+      debugPrint('✅ Globe spin completed');
+
+      // Step 2: Zoom to India after spin completes
+      debugPrint('🇮🇳 Step 2: Zooming to India');
+      
+      // India's approximate centroid coordinates
+      const indiaLatitude = 23.5;
+      const indiaLongitude = 77.0;
+      const indiaZoom = 3.75; // Globe-friendly zoom level
+
+      final indiaCameraOptions = CameraOptions(
+        center: Point(
+          coordinates: Position(indiaLongitude, indiaLatitude),
+        ),
+        zoom: indiaZoom,
+        bearing: 0.0, // Reset bearing to 0 so India appears correctly oriented
+        pitch: currentCameraState.pitch, // Preserve pitch
+      );
+
+      await currentMap.flyTo(
+        indiaCameraOptions,
+        MapAnimationOptions(
+          duration: 2000, // 2 seconds for zoom
+          startDelay: 0,
+        ),
+      );
+
+      debugPrint('✅ Zoom to India completed');
+
+      // Re-enable gestures after animation completes
+      await _enableMapGestures();
+      debugPrint('🔓 Re-enabled map gestures after intro animation');
+
+      debugPrint('✅ Intro animation completed successfully');
+    } catch (e) {
+      debugPrint('❌ Error during intro animation: $e');
+      // Re-enable gestures even if animation fails
+      await _enableMapGestures();
     }
   }
 
@@ -901,6 +1002,24 @@ class _WorldMapPageState extends State<WorldMapPage> {
         doubleTapToZoomInEnabled: true,
         doubleTouchToZoomOutEnabled: true,
         pitchEnabled: true,
+      ),
+    );
+  }
+
+  /// Disable all map gestures completely (used during intro animation)
+  Future<void> _disableAllMapGestures() async {
+    if (mapboxMap == null) return;
+
+    await mapboxMap!.gestures.updateSettings(
+      GesturesSettings(
+        scrollEnabled: false,
+        scrollMode: ScrollMode.HORIZONTAL_AND_VERTICAL,
+        rotateEnabled: false,
+        pinchToZoomEnabled: false,
+        quickZoomEnabled: false,
+        doubleTapToZoomInEnabled: false,
+        doubleTouchToZoomOutEnabled: false,
+        pitchEnabled: false,
       ),
     );
   }
