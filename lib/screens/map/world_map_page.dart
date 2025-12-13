@@ -9,6 +9,7 @@ import '../../widgets/map_search_bar.dart';
 import '../../widgets/map/draw_rectangle_button.dart';
 import '../../widgets/map/rectangle_controls.dart';
 import '../../services/land_service.dart';
+import '../../data/open_states/open_states_geojson.dart';
 import 'rectangle_drawing/rectangle_drawing_controller.dart';
 import 'rectangle_drawing/rectangle_model.dart';
 
@@ -164,6 +165,35 @@ class _WorldMapPageState extends State<WorldMapPage> {
       debugPrint('⚠️ Error disabling scale bar/compass: $e');
     }
 
+    // Set maximum zoom level to 10
+    try {
+      // Wait for map to be fully ready
+      await Future.delayed(const Duration(milliseconds: 200));
+      
+      // Set bounds with max zoom constraint (infinite bounds to allow panning anywhere)
+      final bounds = CoordinateBounds(
+        southwest: Point(
+          coordinates: Position(-180.0, -90.0),
+        ),
+        northeast: Point(
+          coordinates: Position(180.0, 90.0),
+        ),
+        infiniteBounds: true,
+      );
+
+      await mapboxMapController.setBounds(
+        CameraBoundsOptions(
+          bounds: bounds,
+          maxZoom: 10.0,
+          minZoom: 0.0,
+        ),
+      );
+
+      debugPrint('✅ Set maximum zoom level to 10');
+    } catch (e) {
+      debugPrint('⚠️ Error setting max zoom constraint: $e');
+    }
+
     // Wait a short moment for the map to initialize, then mark as ready
     // The map widget is ready when onMapCreated fires, style loads asynchronously
     Future.delayed(const Duration(milliseconds: 500), () {
@@ -223,6 +253,13 @@ class _WorldMapPageState extends State<WorldMapPage> {
     // Subsequent loads: clean up halo/shadow artifacts.
     await _removeHaloEffects(style);
 
+    // Add open states outline layer after style is stable
+    // This must run after fog is applied and halo removal is complete
+    // Only add when _hasAppliedCustomFog == true to avoid layer disappearing bug
+    if (_hasAppliedCustomFog) {
+      await _addOpenStatesOutlineLayer(style);
+    }
+
     // Initialize rectangle drawing controller after style is ready
     if (_rectangleController == null) {
       try {
@@ -245,6 +282,7 @@ class _WorldMapPageState extends State<WorldMapPage> {
     }
 
     // Load user polygons when map is ready
+    // User polygons will be added after open states outline, so they appear on top
     await _loadUserPolygons();
   }
 // Listen for symbol clicks (for selecting rectangles)
@@ -290,7 +328,11 @@ class _WorldMapPageState extends State<WorldMapPage> {
       int modifiedCount = 0;
 
       // Iterate through all layers
+      // Note: getStyleLayers() returns List<StyleObjectInfo?> - some entries can be null
       for (final layer in layers) {
+        // Skip null layers (Mapbox injects placeholder objects during reloads)
+        if (layer == null) continue;
+        
         try {
           // Get layer type - check if it's a symbol layer by checking for text properties
           final layerId = layer.id;
@@ -355,16 +397,90 @@ class _WorldMapPageState extends State<WorldMapPage> {
     }
   }
 
+  /// Adds open states outline layer to the map
+  /// 
+  /// This method is idempotent and safe to call multiple times.
+  /// It creates a GeoJSON source and a LineLayer for all open state boundaries.
+  /// The layer is positioned below user polygons but above satellite imagery.
+  /// 
+  /// This method supports multiple states (Level-1 GADM polygons) and renders
+  /// blue outlines for all open states. The GeoJSON structure allows for future
+  /// expansion to use these polygons as holes in a locked world mask.
+  /// 
+  /// [style] - The Mapbox style manager
+  Future<void> _addOpenStatesOutlineLayer(StyleManager style) async {
+    const sourceId = 'open-states-source';
+    const layerId = 'open-states-outline-layer';
+
+    try {
+      // Load open states GeoJSON
+      final openStatesGeoJson = await loadOpenStatesGeoJson();
+
+      // Add or update GeoJSON source
+      try {
+        await style.addSource(GeoJsonSource(
+          id: sourceId,
+          data: jsonEncode(openStatesGeoJson),
+        ));
+        debugPrint('✅ Added open states outline source');
+      } catch (e) {
+        // Source might already exist, update it instead
+        try {
+          await style.setStyleSourceProperty(
+            sourceId,
+            'data',
+            jsonEncode(openStatesGeoJson),
+          );
+          debugPrint('✅ Updated open states outline source');
+        } catch (updateError) {
+          debugPrint('⚠️ Could not add/update open states source: $updateError');
+          return;
+        }
+      }
+
+      // Add line layer for the outline
+      // Use solid blue color with ARGB format (0xFF0000FF = blue)
+      // This visually communicates "These regions are open"
+      try {
+        // Check if user-polygons-line-layer exists to position correctly
+        // Note: getStyleLayers() returns List<StyleObjectInfo?> - filter nulls first
+        final layers = await style.getStyleLayers();
+        final userPolygonLayerExists = layers
+            .whereType<StyleObjectInfo>()
+            .any((layer) => layer.id == 'user-polygons-line-layer');
+
+        await style.addLayer(
+          LineLayer(
+            id: layerId,
+            sourceId: sourceId,
+            lineColor: 0xFF000000, // Solid black (ARGB format)
+            lineWidth: 1,
+            lineJoin: LineJoin.ROUND,
+            lineCap: LineCap.ROUND,
+            // No dash pattern, no fill - outline only
+          ),
+        );
+        debugPrint('✅ Added open states outline layer');
+      } catch (e) {
+        // Layer might already exist - this is fine, method is idempotent
+        debugPrint('ℹ️ Open states outline layer already exists or error: $e');
+      }
+    } catch (e) {
+      debugPrint('❌ Error adding open states outline: $e');
+      // Don't rethrow - this is a non-critical feature
+    }
+  }
+
   /// Zoom to a specific location on the map
   ///
   /// [latitude] - Target latitude
   /// [longitude] - Target longitude
-  /// [zoom] - Target zoom level (default: 17y.0 for city level)
+  /// [zoom] - Target zoom level (default: 10.0, max: 10.0)
   /// [duration] - Animation duration in milliseconds (default: 1500)
   Future<void> _zoomToLocation(
     double latitude,
     double longitude, {
-    double zoom = 17.0,
+    double zoom = 10.0,
     int duration = 1500,
   }) async {
     final currentMap = mapboxMap;
@@ -373,16 +489,19 @@ class _WorldMapPageState extends State<WorldMapPage> {
       return;
     }
 
+    // Clamp zoom to maximum of 10
+    final clampedZoom = zoom > 10.0 ? 10.0 : zoom;
+
     try {
       debugPrint(
-          '📍 Zooming to location: ($latitude, $longitude) at zoom level $zoom');
+          '📍 Zooming to location: ($latitude, $longitude) at zoom level $clampedZoom');
 
       // Create camera options for the target location
       final cameraOptions = CameraOptions(
         center: Point(
           coordinates: Position(longitude, latitude),
         ),
-        zoom: zoom,
+        zoom: clampedZoom,
       );
 
       // Animate camera to the location
@@ -626,18 +745,39 @@ class _WorldMapPageState extends State<WorldMapPage> {
 
   /// Handles camera change events to track zoom level
   /// In resize mode, camera movement is prevented by disabling scroll gestures
-  /// No need to revert camera - gestures are disabled so it can't move
+  /// Enforces maximum zoom level of 10
   void onCameraChange(CameraChangedEventData data) async {
     if (mapboxMap == null) return;
 
-    // In resize mode, scrolling is disabled so camera shouldn't move
-    // No need to revert - just track zoom level
     try {
       final cameraState = await mapboxMap!.getCameraState();
-      if (mounted) {
-        setState(() {
-          _currentZoom = cameraState.zoom;
-        });
+      final currentZoom = cameraState.zoom;
+
+      // Enforce maximum zoom of 10
+      if (currentZoom > 10.0) {
+        debugPrint('⚠️ Zoom exceeded maximum (${currentZoom} > 10.0), correcting...');
+        
+        // Set camera back to max zoom of 10
+        await mapboxMap!.setCamera(
+          CameraOptions(
+            center: cameraState.center,
+            zoom: 10.0,
+            bearing: cameraState.bearing,
+            pitch: cameraState.pitch,
+          ),
+        );
+        
+        if (mounted) {
+          setState(() {
+            _currentZoom = 10.0;
+          });
+        }
+      } else {
+        if (mounted) {
+          setState(() {
+            _currentZoom = currentZoom;
+          });
+        }
       }
     } catch (e) {
       debugPrint('⚠️ Error getting camera state: $e');
@@ -1100,7 +1240,7 @@ class _WorldMapPageState extends State<WorldMapPage> {
         ),
         zoom: 0.0, // Full world view
       ),
-      styleUri: "mapbox://styles/arhaan21/cmiz2ed9a003301sacraodhpo",
+      styleUri: "mapbox://styles/arhaan21/cmj4vqiqa002901s6eb5bd9k0",
     );
 
     // Always wrap map in GestureDetector to prevent widget tree changes
@@ -1122,7 +1262,7 @@ class _WorldMapPageState extends State<WorldMapPage> {
           MapSearchBar(
             onPlaceSelected: _onPlaceSelected,
             onSearchCleared: _resetMapToDefault,
-            hintText: 'Search for a place (e.g., rt nagar, Bangalore)',
+            hintText: 'Search for a place',
           ),
         // Rectangle drawing button (only visible when zoomed in enough)
         if (_isMapReady && _currentZoom >= 12.0)

@@ -30,4 +30,5 @@ flutter:
 
   assets:
     - assets/.env
+    - lib/data/open_states/open_states_level1.json
 

@@ -54,8 +54,9 @@ class _MapSearchBarState extends State<MapSearchBar> {
   }
 
   void _onFocusChanged() {
+    // Don't show results dropdown - suggestions are disabled
     setState(() {
-      _showResults = _focusNode.hasFocus && _searchResults.isNotEmpty;
+      _showResults = false;
     });
   }
 
@@ -121,7 +122,7 @@ class _MapSearchBarState extends State<MapSearchBar> {
       _isSearching = false;
       if (result['success'] == true) {
         _searchResults = result['places'] as List<PlaceResult>;
-        _showResults = _focusNode.hasFocus && _searchResults.isNotEmpty;
+        _showResults = false; // Don't show suggestions dropdown
         _errorMessage = null;
       } else {
         _searchResults = [];
@@ -231,122 +232,6 @@ class _MapSearchBarState extends State<MapSearchBar> {
             },
           ),
         ),
-        // Search results dropdown
-        if (_showResults && _searchResults.isNotEmpty)
-          Positioned(
-            top: 80,
-            left: 16,
-            right: 16,
-            child: Material(
-              elevation: 24, // Higher elevation to appear above map
-              borderRadius: BorderRadius.circular(12),
-              color: Colors.transparent,
-              child: Container(
-                constraints: const BoxConstraints(maxHeight: 300),
-                decoration: BoxDecoration(
-                  color: AppTheme.surfaceColor,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: AppTheme.primaryColor.withOpacity(0.3),
-                    width: 1.5,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.5),
-                      blurRadius: 16,
-                      offset: const Offset(0, 6),
-                      spreadRadius: 2,
-                    ),
-                    BoxShadow(
-                      color: AppTheme.primaryColor.withOpacity(0.1),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Flexible(
-                      child: ListView.separated(
-                        shrinkWrap: true,
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        itemCount: _searchResults.length,
-                        separatorBuilder: (context, index) => Divider(
-                          height: 1,
-                          color: AppTheme.backgroundColor.withOpacity(0.5),
-                          indent: 16,
-                          endIndent: 16,
-                        ),
-                        itemBuilder: (context, index) {
-                          final place = _searchResults[index];
-                          return Material(
-                            color: Colors.transparent,
-                            child: InkWell(
-                              onTap: () => _selectPlace(place),
-                              borderRadius: BorderRadius.circular(8),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                  vertical: 4,
-                                ),
-                                child: ListTile(
-                                  contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 16,
-                                    vertical: 4,
-                                  ),
-                                  leading: Container(
-                                    padding: const EdgeInsets.all(8),
-                                    decoration: BoxDecoration(
-                                      color: AppTheme.primaryColor.withOpacity(0.2),
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    child: Icon(
-                                      Icons.location_on,
-                                      color: AppTheme.primaryColor,
-                                      size: 24,
-                                    ),
-                                  ),
-                                  title: Text(
-                                    place.name,
-                                    style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                                          color: AppTheme.textPrimary,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                  ),
-                                  subtitle: place.context != null
-                                      ? Padding(
-                                          padding: const EdgeInsets.only(top: 4),
-                                          child: Text(
-                                            place.context!,
-                                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                                  color: AppTheme.textSecondary,
-                                                ),
-                                          ),
-                                        )
-                                      : Padding(
-                                          padding: const EdgeInsets.only(top: 4),
-                                          child: Text(
-                                            place.placeName,
-                                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                                  color: AppTheme.textSecondary,
-                                                ),
-                                            maxLines: 2,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                        ),
-                                ),
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
         // Error message
         if (_errorMessage != null && _searchController.text.isNotEmpty)
           Positioned(
