@@ -10,6 +10,7 @@ import '../../widgets/map/draw_rectangle_button.dart';
 import '../../widgets/map/rectangle_controls.dart';
 import '../../services/land_service.dart';
 import '../../data/open_states/open_states_geojson.dart';
+import '../../data/world_bounds_helper.dart';
 import 'rectangle_drawing/rectangle_drawing_controller.dart';
 import 'rectangle_drawing/rectangle_model.dart';
 
@@ -254,6 +255,13 @@ class _WorldMapPageState extends State<WorldMapPage> {
     // Subsequent loads: clean up halo/shadow artifacts.
     await _removeHaloEffects(style);
 
+    // Add world-lock layer (gray fill for locked areas)
+    // This must run after fog is applied and halo removal is complete
+    // Only add when _hasAppliedCustomFog == true to avoid layer disappearing bug
+    if (_hasAppliedCustomFog) {
+      await _addWorldLockLayer(style);
+    }
+
     // Add open states outline layer after style is stable
     // This must run after fog is applied and halo removal is complete
     // Only add when _hasAppliedCustomFog == true to avoid layer disappearing bug
@@ -404,6 +412,83 @@ class _WorldMapPageState extends State<WorldMapPage> {
     } catch (e) {
       debugPrint('❌ Error in _removeHaloEffects: $e');
       // Don't rethrow - this is a non-critical enhancement
+    }
+  }
+
+  /// Adds world-lock layer to the map
+  /// 
+  /// This method creates an inverse polygon that shows gray fill everywhere
+  /// except the open states. The open states appear as transparent holes.
+  /// 
+  /// Layer ordering:
+  /// - Above satellite imagery
+  /// - Below open state outlines
+  /// - Below user polygons
+  /// - Below rectangles
+  /// 
+  /// This method is idempotent and safe to call multiple times.
+  /// 
+  /// [style] - The Mapbox style manager
+  Future<void> _addWorldLockLayer(StyleManager style) async {
+    const sourceId = 'world-lock-source';
+    const layerId = 'world-lock-fill-layer';
+
+    try {
+      // Load open states GeoJSON
+      final openStatesGeoJson = await loadOpenStatesGeoJson();
+
+      // Build inverse GeoJSON (world bounds with open states as holes)
+      final inverseGeoJson = buildInverseGeoJson(openStatesGeoJson);
+
+      // Add or update GeoJSON source
+      try {
+        await style.addSource(GeoJsonSource(
+          id: sourceId,
+          data: jsonEncode(inverseGeoJson),
+        ));
+        debugPrint('✅ Added world-lock source');
+      } catch (e) {
+        // Source might already exist, update it instead
+        try {
+          await style.setStyleSourceProperty(
+            sourceId,
+            'data',
+            jsonEncode(inverseGeoJson),
+          );
+          debugPrint('✅ Updated world-lock source');
+        } catch (updateError) {
+          debugPrint('⚠️ Could not add/update world-lock source: $updateError');
+          return;
+        }
+      }
+
+      // Add fill layer for the locked areas
+      // Color: light gray rgba(160,160,160,0.55) - opacity baked into color
+      // No outline, no pattern - just a simple fill
+      // Layer ordering: This layer is added before open-states-outline-layer,
+      // so it will appear below it (correct ordering)
+      try {
+        // Convert rgba(160,160,160,0.55) to ARGB int
+        // ARGB format: 0xAARRGGBB
+        // rgba(160,160,160,0.55) = 0x8CA0A0A0 (alpha = 0.55 * 255 = 140 = 0x8C)
+        const fillColor = 0x8CA0A0A0; // rgba(160,160,160,0.55) in ARGB
+
+        await style.addLayer(
+          FillLayer(
+            id: layerId,
+            sourceId: sourceId,
+            fillColor: fillColor,
+            // No fillOpacity - opacity is baked into color
+          ),
+        );
+        debugPrint('✅ Added world-lock fill layer');
+      } catch (e) {
+        // Layer might already exist - this is fine, method is idempotent
+        debugPrint('ℹ️ World-lock fill layer already exists or error: $e');
+      }
+    } catch (e) {
+      debugPrint('❌ Error adding world-lock layer: $e');
+      // Don't rethrow - this is a non-critical feature
     }
   }
 
