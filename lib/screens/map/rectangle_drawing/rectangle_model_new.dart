@@ -156,9 +156,9 @@ class RectangleModel {
     // Convert to degrees and rotate around center
     final cornersDegrees = cornersLocal.map((local) {
       // Convert local meters to degrees offset
-      final latOffset = CoordinateConverter.metersToLatitudeDegrees(local.lat);
+      final latOffset = CoordinateConverter.metersToLatitudeDegrees(local.lat.toDouble());
       final lngOffset = CoordinateConverter.metersToLongitudeDegrees(
-          local.lng, center.lat);
+          local.lng.toDouble(), center.lat.toDouble());
 
       // Create unrotated corner
       final unrotated = Position(

@@ -95,13 +95,13 @@ class RectangleGestures {
     }
   }
 
-  /// Disable map gestures during drag (keep scrollEnabled=true for events, but set scrollMode=NONE)
+  /// Disable map gestures during drag (disable scrolling to prevent map movement)
   static Future<void> disableMapGestures(MapboxMap mapboxMap) async {
     try {
       await mapboxMap.gestures.updateSettings(
         GesturesSettings(
-          scrollEnabled: true,  // Keep enabled for drag events
-          scrollMode: ScrollMode.NONE,  // But disable actual scrolling
+          scrollEnabled: false,  // Disable scrolling to prevent map movement
+          scrollMode: ScrollMode.HORIZONTAL_AND_VERTICAL,
           rotateEnabled: false,
           pitchEnabled: false,
           pinchToZoomEnabled: false,

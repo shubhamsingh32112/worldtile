@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import '../../theme/app_theme.dart';
 
-class EarnTab extends StatelessWidget {
-  const EarnTab({super.key});
+class EarnPage extends StatelessWidget {
+  const EarnPage({super.key});
 
   @override
   Widget build(BuildContext context) {

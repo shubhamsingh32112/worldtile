@@ -56,7 +56,7 @@ class CoordinateConverter {
     double metersEast,
   ) {
     final latDelta = metersToLatitudeDegrees(metersNorth);
-    final lngDelta = metersToLongitudeDegrees(metersEast, position.lat);
+    final lngDelta = metersToLongitudeDegrees(metersEast, position.lat.toDouble());
 
     return Position(
       position.lng + lngDelta,
@@ -73,8 +73,8 @@ class CoordinateConverter {
     final angleRad = angleDegrees * pi / 180.0;
 
     // Convert to local coordinate system (meters)
-    final dxMeters = longitudeDegreesToMeters(point.lng - center.lng, center.lat);
-    final dyMeters = latitudeDegreesToMeters(point.lat - center.lat);
+    final dxMeters = longitudeDegreesToMeters((point.lng - center.lng).toDouble(), center.lat.toDouble());
+    final dyMeters = latitudeDegreesToMeters((point.lat - center.lat).toDouble());
 
     // Rotate
     final cosAngle = cos(angleRad);
@@ -83,8 +83,8 @@ class CoordinateConverter {
     final rotatedYMeters = dxMeters * sinAngle + dyMeters * cosAngle;
 
     // Convert back to degrees
-    final rotatedLng = center.lng + metersToLongitudeDegrees(rotatedXMeters, center.lat);
-    final rotatedLat = center.lat + metersToLatitudeDegrees(rotatedYMeters);
+    final rotatedLng = center.lng + metersToLongitudeDegrees(rotatedXMeters.toDouble(), center.lat.toDouble());
+    final rotatedLat = center.lat + metersToLatitudeDegrees(rotatedYMeters.toDouble());
 
     return Position(rotatedLng, rotatedLat);
   }

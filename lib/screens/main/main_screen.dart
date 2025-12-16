@@ -1,122 +1,71 @@
 import 'package:flutter/material.dart';
 import '../../theme/app_theme.dart';
-import 'home_tab.dart';
-import 'buy_land_tab.dart';
-import 'value_tab.dart';
+import '../map/map_controller.dart';
+import '../map/world_map_page.dart';
+import 'deed_page.dart';
 import 'earn_tab.dart';
-import '../account/account_screen.dart';
+import '../../widgets/floating_bottom_nav_bar.dart';
 
 class MainScreen extends StatefulWidget {
-  const MainScreen({super.key});
+  final int initialTabIndex;
+  
+  const MainScreen({super.key, this.initialTabIndex = 0});
 
   @override
   State<MainScreen> createState() => _MainScreenState();
 }
 
 class _MainScreenState extends State<MainScreen> {
-  int _currentIndex = 0;
+  late int _currentIndex;
 
-  final List<Widget> _tabs = [
-    const HomeTab(),
-    const BuyLandTab(),
-    const ValueTab(),
-    const EarnTab(),
+  final List<Widget> _tabs = const [
+    WorldMapPage(), // Buy Land
+    DeedPage(),
+    EarnPage(),
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    _currentIndex = widget.initialTabIndex;
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppTheme.backgroundColor,
-      appBar: AppBar(
-        backgroundColor: AppTheme.surfaceColor,
-        elevation: 0,
-        title: Text(
-          _getAppBarTitle(),
-          style: Theme.of(context).textTheme.headlineMedium,
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.account_circle_outlined),
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => const AccountScreen(),
-                ),
-              );
-            },
+      body: Stack(
+        children: [
+          IndexedStack(
+            index: _currentIndex,
+            children: _tabs,
+          ),
+          Positioned(
+            bottom: 20,
+            left: 16,
+            right: 16,
+            child: FloatingBottomNavBar(
+              currentIndex: _currentIndex,
+              onTap: _onTabTapped,
+              items: const [
+                NavItem(icon: Icons.public, label: 'Buy Land'),
+                NavItem(icon: Icons.receipt_long, label: 'Deed'),
+                NavItem(icon: Icons.trending_up, label: 'Earn'),
+              ],
+            ),
           ),
         ],
-      ),
-      body: _tabs[_currentIndex],
-      bottomNavigationBar: Container(
-        decoration: BoxDecoration(
-          color: AppTheme.surfaceColor,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.3),
-              blurRadius: 10,
-              offset: const Offset(0, -5),
-            ),
-          ],
-        ),
-        child: BottomNavigationBar(
-          currentIndex: _currentIndex,
-          onTap: (index) {
-            setState(() {
-              _currentIndex = index;
-            });
-          },
-          type: BottomNavigationBarType.fixed,
-          backgroundColor: AppTheme.surfaceColor,
-          selectedItemColor: AppTheme.primaryColor,
-          unselectedItemColor: AppTheme.textSecondary,
-          selectedLabelStyle: const TextStyle(
-            fontWeight: FontWeight.w600,
-            fontSize: 12,
-          ),
-          unselectedLabelStyle: const TextStyle(
-            fontWeight: FontWeight.normal,
-            fontSize: 12,
-          ),
-          items: const [
-            BottomNavigationBarItem(
-              icon: Icon(Icons.home_outlined),
-              activeIcon: Icon(Icons.home),
-              label: 'Home',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.map_outlined),
-              activeIcon: Icon(Icons.map),
-              label: 'Buy Land',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.trending_up_outlined),
-              activeIcon: Icon(Icons.trending_up),
-              label: 'Value',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.monetization_on_outlined),
-              activeIcon: Icon(Icons.monetization_on),
-              label: 'Earn',
-            ),
-          ],
-        ),
       ),
     );
   }
 
-  String _getAppBarTitle() {
-    switch (_currentIndex) {
-      case 0:
-        return 'Home';
-      case 1:
-        return 'Buy Land';
-      case 2:
-        return 'Portfolio Value';
-      case 3:
-        return 'Earn';
-      default:
-        return 'WorldTile';
+  void _onTabTapped(int index) {
+    setState(() {
+      _currentIndex = index;
+    });
+
+    if (index == 0) {
+      WorldMapController.instance.zoomToIndia();
     }
   }
 }
