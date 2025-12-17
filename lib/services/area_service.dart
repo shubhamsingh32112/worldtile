@@ -203,6 +203,55 @@ class AreaService {
     }
   }
 
+  /// Get multiple available land slots for an area (requires authentication)
+  /// [areaKey] - The area key
+  /// [quantity] - Number of slots to get (default: 1)
+  static Future<Map<String, dynamic>> getAvailableSlots({
+    required String areaKey,
+    required int quantity,
+  }) async {
+    try {
+      final normalizedAreaKey = areaKey.toLowerCase().trim();
+      final uri = Uri.parse('$baseUrl/areas/$normalizedAreaKey/available-slots')
+          .replace(queryParameters: {'quantity': quantity.toString()});
+
+      if (kDebugMode) {
+        print('🔍 Getting $quantity available slot(s) for area: $normalizedAreaKey');
+      }
+
+      final response = await http.get(
+        uri,
+        headers: await _getHeaders(),
+      );
+
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode == 200) {
+        if (kDebugMode) {
+          print('✅ Available slots found: ${data['count']}');
+        }
+        return {
+          'success': true,
+          'landSlots': data['landSlots'] ?? [],
+          'count': data['count'] ?? 0,
+        };
+      } else {
+        return {
+          'success': false,
+          'message': data['message'] ?? 'No available slots found',
+        };
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error getting available slots: $e');
+      }
+      return {
+        'success': false,
+        'message': 'Connection error: ${e.toString()}',
+      };
+    }
+  }
+
   /// Buy a tile for an area (requires authentication)
   /// [areaKey] - The area key
   /// [quantity] - Number of tiles to buy (default: 1)

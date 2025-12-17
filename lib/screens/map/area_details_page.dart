@@ -137,19 +137,6 @@ class _AreaDetailsPageState extends State<AreaDetailsPage> {
     });
 
     try {
-      // For now, only support buying 1 tile at a time (crypto payment flow)
-      if (_quantity > 1) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Please buy one tile at a time for crypto payments'),
-              backgroundColor: Colors.orange,
-            ),
-          );
-        }
-        return;
-      }
-
       // Get area data for state info
       if (_areaData == null) {
         if (mounted) {
@@ -178,16 +165,17 @@ class _AreaDetailsPageState extends State<AreaDetailsPage> {
         return;
       }
 
-      // Step 1: Get an available land slot
-      final slotResult = await AreaService.getAvailableSlot(
+      // Step 1: Get available land slots (quantity based)
+      final slotsResult = await AreaService.getAvailableSlots(
         areaKey: widget.areaKey,
+        quantity: _quantity,
       );
 
-      if (!slotResult['success']) {
+      if (!slotsResult['success']) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(slotResult['message'] ?? 'No available slots found'),
+              content: Text(slotsResult['message'] ?? 'No available slots found'),
               backgroundColor: Colors.red,
             ),
           );
@@ -195,14 +183,16 @@ class _AreaDetailsPageState extends State<AreaDetailsPage> {
         return;
       }
 
-      final landSlot = slotResult['landSlot'] as Map<String, dynamic>;
-      final landSlotId = landSlot['landSlotId'] as String;
+      final landSlots = slotsResult['landSlots'] as List<dynamic>;
+      final landSlotIds = landSlots
+          .map((slot) => (slot as Map<String, dynamic>)['landSlotId'] as String)
+          .toList();
 
-      // Step 2: Create order
+      // Step 2: Create order with multiple slots
       final orderResult = await OrderService.createOrder(
         state: stateKey,
         place: widget.areaKey,
-        landSlotId: landSlotId,
+        landSlotIds: landSlotIds,
       );
 
       if (!orderResult['success']) {
@@ -228,7 +218,8 @@ class _AreaDetailsPageState extends State<AreaDetailsPage> {
               network: orderResult['network'] as String,
               state: stateName,
               place: _areaData!['areaName'] as String? ?? widget.areaKey,
-              landSlotId: landSlotId,
+              landSlotIds: landSlotIds,
+              quantity: _quantity,
             ),
           ),
         ).then((success) {

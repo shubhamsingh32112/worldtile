@@ -66,17 +66,17 @@ class OrderService {
   /// Create a new order for buying virtual land
   /// [state] - State key (e.g., "karnataka")
   /// [place] - Area key (e.g., "whitefield")
-  /// [landSlotId] - Land slot ID
+  /// [landSlotIds] - Array of land slot IDs
   static Future<Map<String, dynamic>> createOrder({
     required String state,
     required String place,
-    required String landSlotId,
+    required List<String> landSlotIds,
   }) async {
     try {
       final uri = Uri.parse('$baseUrl/orders/create');
 
       if (kDebugMode) {
-        print('💰 Creating order for land slot: $landSlotId');
+        print('💰 Creating order for ${landSlotIds.length} land slot(s): ${landSlotIds.join(", ")}');
       }
 
       final response = await http.post(
@@ -85,7 +85,7 @@ class OrderService {
         body: jsonEncode({
           'state': state,
           'place': place,
-          'landSlotId': landSlotId,
+          'landSlotIds': landSlotIds,
         }),
       );
 

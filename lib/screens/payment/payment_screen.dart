@@ -13,7 +13,8 @@ class PaymentScreen extends StatefulWidget {
   final String network;
   final String state;
   final String place;
-  final String landSlotId;
+  final List<String> landSlotIds;
+  final int quantity;
 
   const PaymentScreen({
     super.key,
@@ -23,7 +24,8 @@ class PaymentScreen extends StatefulWidget {
     required this.network,
     required this.state,
     required this.place,
-    required this.landSlotId,
+    required this.landSlotIds,
+    required this.quantity,
   });
 
   @override
@@ -177,7 +179,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
                     const SizedBox(height: 12),
                     _buildInfoRow('State', widget.state),
                     _buildInfoRow('Area', widget.place),
-                    _buildInfoRow('Land Slot', widget.landSlotId),
+                    _buildInfoRow('Quantity', '${widget.quantity} tile(s)'),
+                    if (widget.quantity == 1)
+                      _buildInfoRow('Land Slot', widget.landSlotIds.first)
+                    else
+                      _buildInfoRow('Land Slots', '${widget.landSlotIds.length} slots'),
                     _buildInfoRow('Order ID', widget.orderId),
                   ],
                 ),
@@ -200,10 +206,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
                     ),
                     const SizedBox(height: 16),
                     
-                    // Amount (Read-only)
+                    // Amount (Read-only) - Total for all tiles
                     _buildReadOnlyField(
-                      label: 'Amount',
-                      value: '${widget.amount} USDT',
+                      label: 'Total Amount',
+                      value: '${widget.amount} USDT (${widget.quantity} tile${widget.quantity > 1 ? 's' : ''})',
                       icon: Icons.attach_money,
                     ),
                     
@@ -378,6 +384,57 @@ class _PaymentScreenState extends State<PaymentScreen> {
                           ],
                         ),
                       ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+
+            // Show list of land slots if multiple
+            if (widget.quantity > 1) ...[
+              const SizedBox(height: 24),
+              Card(
+                color: AppTheme.cardColor,
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Land Slots (${widget.landSlotIds.length})',
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      ...widget.landSlotIds.asMap().entries.map((entry) {
+                        final index = entry.key;
+                        final slotId = entry.value;
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: Row(
+                            children: [
+                              Text(
+                                '${index + 1}.',
+                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                  color: AppTheme.textSecondary,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  slotId,
+                                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                    fontFamily: 'monospace',
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
                     ],
                   ),
                 ),
