@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../theme/app_theme.dart';
 import '../../services/order_service.dart';
 
@@ -36,6 +37,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
   final _txHashController = TextEditingController();
   bool _isSubmitting = false;
   bool _hasSubmitted = false;
+  bool _hasClickedPayNow = false;
 
   @override
   void dispose() {
@@ -60,6 +62,121 @@ class _PaymentScreenState extends State<PaymentScreen> {
         ),
       );
     }
+  }
+
+  /// Copy amount to clipboard
+  Future<void> _copyAmount() async {
+    await Clipboard.setData(ClipboardData(text: widget.amount));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Amount copied to clipboard'),
+          backgroundColor: AppTheme.primaryColor,
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  /// Launch wallet with TRON payment URI
+  /// Attempts in order: tron: deep link (Trust Wallet/TronLink) -> Binance universal link -> Error dialog
+  /// 
+  /// IMPORTANT: canLaunchUrl() is ONLY used for custom schemes (tron:)
+  /// For HTTPS universal links (Binance), we attempt launchUrl() directly and let the OS decide
+  Future<void> _launchWallet() async {
+    // Primary: TRON deep link (Trust Wallet / TronLink)
+    final tronUri = Uri.parse('tron:${widget.address}?amount=${widget.amount}');
+    
+    // Fallback: Binance universal link (HTTPS)
+    final binanceUrl = Uri.parse(
+      'https://www.binance.com/en/my/wallet/account/send?coin=USDT&network=TRX&address=${widget.address}&amount=${widget.amount}',
+    );
+
+    // Step 1: Try TRON deep link first (preferred)
+    // Use canLaunchUrl() ONLY for custom schemes like tron:
+    try {
+      if (await canLaunchUrl(tronUri)) {
+        final launched = await launchUrl(
+          tronUri,
+          mode: LaunchMode.externalApplication,
+        );
+        if (launched) {
+          // Success - mark that user has clicked Pay Now
+          setState(() {
+            _hasClickedPayNow = true;
+          });
+          return;
+        }
+      }
+    } catch (_) {
+      // TRON deep link failed, continue to fallback
+    }
+
+    // Step 2: Try Binance fallback (HTTPS universal link)
+    // DO NOT use canLaunchUrl() for HTTPS - let the OS decide
+    // Attempt launchUrl() directly (optimistic approach)
+    try {
+      final launched = await launchUrl(
+        binanceUrl,
+        mode: LaunchMode.externalApplication,
+      );
+      if (launched) {
+        // Success - mark that user has clicked Pay Now
+        setState(() {
+          _hasClickedPayNow = true;
+        });
+        return;
+      }
+    } catch (_) {
+      // Binance fallback failed, continue to error dialog
+    }
+
+    // Step 3: If both attempts failed, show error dialog
+    if (mounted) {
+      _showNoWalletDialog();
+    }
+  }
+
+  /// Show dialog when no wallet is found (only after all options fail)
+  void _showNoWalletDialog() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          backgroundColor: AppTheme.cardColor,
+          title: const Text(
+            'No Compatible Wallet Found',
+            style: TextStyle(color: AppTheme.textPrimary),
+          ),
+          content: const Text(
+            'We couldn\'t find a TRON-compatible wallet.\n\nInstall Trust Wallet or TronLink, or use Binance to send USDT (TRC20) manually.',
+            style: TextStyle(color: AppTheme.textSecondary),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _copyAddress();
+              },
+              child: const Text('Copy Address'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _copyAmount();
+              },
+              child: const Text('Copy Amount'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              child: const Text('OK'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   /// Submit transaction hash
@@ -298,8 +415,52 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
             const SizedBox(height: 24),
 
-            // Transaction Hash Input Card
-            if (!_hasSubmitted) ...[
+            // Pay Now Button (shown initially)
+            if (!_hasClickedPayNow && !_hasSubmitted) ...[
+              Card(
+                color: AppTheme.cardColor,
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Ready to Pay',
+                        style: Theme.of(context).textTheme.headlineSmall,
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        'Click "Pay Now" to open your crypto wallet and complete the payment.',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: AppTheme.textSecondary,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: _launchWallet,
+                          style: ElevatedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            backgroundColor: AppTheme.primaryColor,
+                          ),
+                          child: const Text(
+                            'Pay Now',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+
+            // Transaction Hash Input Card (shown after Pay Now is clicked)
+            if (_hasClickedPayNow && !_hasSubmitted) ...[
               Card(
                 color: AppTheme.cardColor,
                 child: Padding(
@@ -352,7 +513,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
                   ),
                 ),
               ),
-            ] else ...[
+            ],
+
+            // Success message
+            if (_hasSubmitted) ...[
               // Success message
               Card(
                 color: Colors.green.withOpacity(0.2),
