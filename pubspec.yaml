@@ -19,8 +19,14 @@ dependencies:
   flutter_dotenv: ^5.1.0
   mapbox_maps_flutter: ^2.12.0
   permission_handler: ^11.3.1
+  device_info_plus: ^10.1.0
   qr_flutter: ^4.1.0
-  url_launcher: ^6.3.0
+  path_provider: ^2.1.1
+  google_sign_in: ^6.2.1
+  firebase_core: ^3.6.0
+  firebase_auth: ^5.3.1
+  url_launcher: ^6.2.2
+  share_plus: ^7.2.1
 
 dev_dependencies:
   flutter_test:
@@ -32,5 +38,6 @@ flutter:
 
   assets:
     - assets/.env
+    - assets/onboarding/
+    - assets/backgrounds/app_bg.jpeg
     - lib/data/open_states/open_states_level1.json
-

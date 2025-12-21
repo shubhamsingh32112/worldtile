@@ -1,12 +1,18 @@
+import 'dart:io';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:path_provider/path_provider.dart';
 import '../../theme/app_theme.dart';
 import '../../services/order_service.dart';
+import '../../layouts/app_shell.dart';
+import '../main/main_screen.dart';
 
 /// Payment Screen
-/// Displays payment details, QR code, and transaction hash input
+/// Displays payment details, QR code, and auto-verification
 class PaymentScreen extends StatefulWidget {
   final String orderId;
   final String amount;
@@ -33,17 +39,17 @@ class PaymentScreen extends StatefulWidget {
   State<PaymentScreen> createState() => _PaymentScreenState();
 }
 
-class _PaymentScreenState extends State<PaymentScreen> {
-  final _txHashController = TextEditingController();
-  bool _isSubmitting = false;
-  bool _hasSubmitted = false;
-  bool _hasClickedPayNow = false;
+enum PaymentState {
+  waiting,    // Waiting for payment
+  checking,   // Checking payment
+  confirmed,  // Payment confirmed
+}
 
-  @override
-  void dispose() {
-    _txHashController.dispose();
-    super.dispose();
-  }
+class _PaymentScreenState extends State<PaymentScreen> {
+  final GlobalKey _qrKey = GlobalKey();
+  PaymentState _paymentState = PaymentState.waiting;
+  bool _isVerifying = false;
+  bool _hasVerified = false;
 
   /// Generate QR code payload in TRON format: tron:<ADDRESS>?amount=<AMOUNT>
   String _generateQRPayload() {
@@ -78,173 +84,191 @@ class _PaymentScreenState extends State<PaymentScreen> {
     }
   }
 
-  /// Launch wallet with TRON payment URI
-  /// Attempts in order: tron: deep link (Trust Wallet/TronLink) -> Binance universal link -> Error dialog
-  /// 
-  /// IMPORTANT: canLaunchUrl() is ONLY used for custom schemes (tron:)
-  /// For HTTPS universal links (Binance), we attempt launchUrl() directly and let the OS decide
-  Future<void> _launchWallet() async {
-    // Primary: TRON deep link (Trust Wallet / TronLink)
-    final tronUri = Uri.parse('tron:${widget.address}?amount=${widget.amount}');
-    
-    // Fallback: Binance universal link (HTTPS)
-    final binanceUrl = Uri.parse(
-      'https://www.binance.com/en/my/wallet/account/send?coin=USDT&network=TRX&address=${widget.address}&amount=${widget.amount}',
-    );
-
-    // Step 1: Try TRON deep link first (preferred)
-    // Use canLaunchUrl() ONLY for custom schemes like tron:
+  /// Download QR code
+  Future<void> _downloadQRCode() async {
     try {
-      if (await canLaunchUrl(tronUri)) {
-        final launched = await launchUrl(
-          tronUri,
-          mode: LaunchMode.externalApplication,
-        );
-        if (launched) {
-          // Success - mark that user has clicked Pay Now
-          setState(() {
-            _hasClickedPayNow = true;
-          });
-          return;
+      // Capture the QR code widget as an image
+      final RenderRepaintBoundary boundary =
+          _qrKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
+      final image = await boundary.toImage(pixelRatio: 3.0);
+      final ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      final Uint8List pngBytes = byteData!.buffer.asUint8List();
+
+      if (Platform.isAndroid) {
+        // Android: Save via MediaStore (appears in Gallery)
+        const platform = MethodChannel('media_store_saver');
+        final fileName = 'payment_qr_${widget.orderId}.png';
+        
+        try {
+          final result = await platform.invokeMethod<bool>(
+            'saveImageToGallery',
+            {
+              'imageBytes': pngBytes,
+              'fileName': fileName,
+            },
+          );
+
+          if (mounted) {
+            if (result == true) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('QR code saved to Gallery → Pictures → WorldTile'),
+                  backgroundColor: Colors.green,
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Failed to save QR code to gallery'),
+                  backgroundColor: Colors.red,
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            }
+          }
+        } on PlatformException catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Error saving QR code: ${e.message ?? "Unknown error"}'),
+                backgroundColor: Colors.red,
+                duration: const Duration(seconds: 3),
+              ),
+            );
+          }
         }
+      } else if (Platform.isIOS) {
+        // iOS: Save to application documents directory
+        final documentsDir = await getApplicationDocumentsDirectory();
+        final worldtileDir = Directory('${documentsDir.path}/worldtile');
+        if (!await worldtileDir.exists()) {
+          await worldtileDir.create(recursive: true);
+        }
+
+        final filePath = '${worldtileDir.path}/payment_qr_${widget.orderId}.png';
+        final file = File(filePath);
+        await file.writeAsBytes(pngBytes);
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('QR code saved to documents'),
+              backgroundColor: Colors.green,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      } else {
+        throw UnsupportedError('Platform not supported');
       }
-    } catch (_) {
-      // TRON deep link failed, continue to fallback
-    }
-
-    // Step 2: Try Binance fallback (HTTPS universal link)
-    // DO NOT use canLaunchUrl() for HTTPS - let the OS decide
-    // Attempt launchUrl() directly (optimistic approach)
-    try {
-      final launched = await launchUrl(
-        binanceUrl,
-        mode: LaunchMode.externalApplication,
-      );
-      if (launched) {
-        // Success - mark that user has clicked Pay Now
-        setState(() {
-          _hasClickedPayNow = true;
-        });
-        return;
-      }
-    } catch (_) {
-      // Binance fallback failed, continue to error dialog
-    }
-
-    // Step 3: If both attempts failed, show error dialog
-    if (mounted) {
-      _showNoWalletDialog();
-    }
-  }
-
-  /// Show dialog when no wallet is found (only after all options fail)
-  void _showNoWalletDialog() {
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          backgroundColor: AppTheme.cardColor,
-          title: const Text(
-            'No Compatible Wallet Found',
-            style: TextStyle(color: AppTheme.textPrimary),
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error saving QR code: ${e.toString()}'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
           ),
-          content: const Text(
-            'We couldn\'t find a TRON-compatible wallet.\n\nInstall Trust Wallet or TronLink, or use Binance to send USDT (TRC20) manually.',
-            style: TextStyle(color: AppTheme.textSecondary),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-                _copyAddress();
-              },
-              child: const Text('Copy Address'),
-            ),
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-                _copyAmount();
-              },
-              child: const Text('Copy Amount'),
-            ),
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-              },
-              child: const Text('OK'),
-            ),
-          ],
         );
-      },
-    );
+      }
+    }
   }
 
-  /// Submit transaction hash
-  Future<void> _submitTransactionHash() async {
-    final txHash = _txHashController.text.trim();
-
-    if (txHash.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please enter a transaction hash'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
-
-    // Validate transaction hash format (64 hex characters)
-    if (!RegExp(r'^[a-fA-F0-9]{64}$').hasMatch(txHash)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Invalid transaction hash format. Must be 64 hexadecimal characters.'),
-          backgroundColor: Colors.red,
-        ),
-      );
+  /// Auto-verify payment
+  Future<void> _verifyPayment() async {
+    // Double-click protection
+    if (_isVerifying || _hasVerified) {
       return;
     }
 
     setState(() {
-      _isSubmitting = true;
+      _isVerifying = true;
+      _paymentState = PaymentState.checking;
     });
 
     try {
-      final result = await OrderService.submitTransactionHash(
+      final result = await OrderService.autoVerifyPayment(
         orderId: widget.orderId,
-        txHash: txHash,
       );
 
       if (mounted) {
+        final status = result['status'] as String?;
+        
         if (result['success'] == true) {
           setState(() {
-            _hasSubmitted = true;
-            _isSubmitting = false;
+            _isVerifying = false;
+            _hasVerified = true;
+            _paymentState = PaymentState.confirmed;
           });
 
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(result['message'] ?? 'Transaction submitted successfully'),
+              content: Text(result['message'] ?? 'Payment verified successfully'),
               backgroundColor: Colors.green,
               duration: const Duration(seconds: 3),
             ),
           );
 
-          // Optionally navigate back after a delay
-          Future.delayed(const Duration(seconds: 2), () {
+          // Auto-redirect to deed page after delay
+          Future.delayed(const Duration(seconds: 3), () {
             if (mounted) {
-              Navigator.of(context).pop(true); // Return true to indicate success
+              // Navigate to MainScreen with Deed tab (tab index 2) selected
+              Navigator.of(context).pushAndRemoveUntil(
+                MaterialPageRoute(
+                  builder: (context) => const MainScreen(initialTabIndex: 2), // Deed tab is at index 2
+                ),
+                (route) => false, // Remove all previous routes
+              );
             }
           });
-        } else {
+        } else if (status == 'EXPIRED') {
+          // Order expired - disable button and show error
           setState(() {
-            _isSubmitting = false;
+            _isVerifying = false;
+            _paymentState = PaymentState.waiting;
           });
 
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(result['message'] ?? 'Failed to submit transaction hash'),
+              content: const Text('Payment window expired. Slots have been released. Please place a new order.'),
               backgroundColor: Colors.red,
-              duration: const Duration(seconds: 3),
+              duration: const Duration(seconds: 5),
+            ),
+          );
+
+          // Auto-redirect after delay
+          Future.delayed(const Duration(seconds: 3), () {
+            if (mounted) {
+              Navigator.of(context).pop(false); // Return false to indicate failure
+            }
+          });
+        } else if (status == 'LATE_PAYMENT') {
+          // Payment received after expiry
+          setState(() {
+            _isVerifying = false;
+            _paymentState = PaymentState.waiting;
+          });
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('Payment received after order expiry. Please contact support for manual processing.'),
+              backgroundColor: Colors.orange,
+              duration: const Duration(seconds: 5),
+            ),
+          );
+        } else {
+          // Still pending
+          setState(() {
+            _isVerifying = false;
+            _paymentState = PaymentState.waiting;
+          });
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(result['message'] ?? 'Payment not detected yet. Please wait a few minutes and try again.'),
+              backgroundColor: Colors.orange,
+              duration: const Duration(seconds: 4),
             ),
           );
         }
@@ -252,7 +276,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _isSubmitting = false;
+          _isVerifying = false;
+          _paymentState = PaymentState.waiting;
         });
 
         ScaffoldMessenger.of(context).showSnackBar(
@@ -268,15 +293,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppTheme.backgroundColor,
-      appBar: AppBar(
-        title: const Text('Payment'),
-        backgroundColor: AppTheme.surfaceColor,
-        foregroundColor: AppTheme.textPrimary,
-        elevation: 0,
-      ),
-      body: SingleChildScrollView(
+    return AppShell(
+      title: 'Payment',
+      showBackButton: true,
+      showBottomNav: false,
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -379,17 +400,20 @@ class _PaymentScreenState extends State<PaymentScreen> {
                       style: Theme.of(context).textTheme.headlineSmall,
                     ),
                     const SizedBox(height: 16),
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: QrImageView(
-                        data: _generateQRPayload(),
-                        version: QrVersions.auto,
-                        size: 250,
-                        backgroundColor: Colors.white,
+                    RepaintBoundary(
+                      key: _qrKey,
+                      child: Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: QrImageView(
+                          data: _generateQRPayload(),
+                          version: QrVersions.auto,
+                          size: 250,
+                          backgroundColor: Colors.white,
+                        ),
                       ),
                     ),
                     const SizedBox(height: 16),
@@ -408,6 +432,19 @@ class _PaymentScreenState extends State<PaymentScreen> {
                       ),
                       textAlign: TextAlign.center,
                     ),
+                    const SizedBox(height: 16),
+                    // Download QR button
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: _downloadQRCode,
+                        icon: const Icon(Icons.download),
+                        label: const Text('Download QR'),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -415,8 +452,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
             const SizedBox(height: 24),
 
-            // Pay Now Button (shown initially)
-            if (!_hasClickedPayNow && !_hasSubmitted) ...[
+            // "I've Paid" Button
+            if (_paymentState == PaymentState.waiting || _paymentState == PaymentState.checking) ...[
               Card(
                 color: AppTheme.cardColor,
                 child: Padding(
@@ -425,88 +462,74 @@ class _PaymentScreenState extends State<PaymentScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Ready to Pay',
+                        _paymentState == PaymentState.waiting
+                            ? 'Waiting for Payment'
+                            : 'Checking Payment',
                         style: Theme.of(context).textTheme.headlineSmall,
                       ),
                       const SizedBox(height: 16),
-                      Text(
-                        'Click "Pay Now" to open your crypto wallet and complete the payment.',
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: AppTheme.textSecondary,
+                      if (_paymentState == PaymentState.waiting)
+                        Text(
+                          'After completing the payment in your wallet, click the button below to verify.',
+                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            color: AppTheme.textSecondary,
+                          ),
+                        )
+                      else
+                        const Row(
+                          children: [
+                            SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                              ),
+                            ),
+                            SizedBox(width: 16),
+                            Text('Checking for payment...'),
+                          ],
                         ),
-                      ),
                       const SizedBox(height: 16),
                       SizedBox(
                         width: double.infinity,
                         child: ElevatedButton(
-                          onPressed: _launchWallet,
+                          onPressed: _isVerifying ? null : _verifyPayment,
                           style: ElevatedButton.styleFrom(
                             padding: const EdgeInsets.symmetric(vertical: 16),
                             backgroundColor: AppTheme.primaryColor,
+                            disabledBackgroundColor: AppTheme.primaryColor.withOpacity(0.6),
                           ),
-                          child: const Text(
-                            'Pay Now',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-
-            // Transaction Hash Input Card (shown after Pay Now is clicked)
-            if (_hasClickedPayNow && !_hasSubmitted) ...[
-              Card(
-                color: AppTheme.cardColor,
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Submit Transaction Hash',
-                        style: Theme.of(context).textTheme.headlineSmall,
-                      ),
-                      const SizedBox(height: 16),
-                      TextField(
-                        controller: _txHashController,
-                        decoration: InputDecoration(
-                          labelText: 'Transaction Hash',
-                          hintText: 'Enter 64-character transaction hash',
-                          prefixIcon: const Icon(Icons.receipt_long),
-                          helperText: 'After payment, paste your transaction hash here',
-                          helperMaxLines: 2,
-                        ),
-                        style: const TextStyle(
-                          color: AppTheme.textPrimary,
-                          fontFamily: 'monospace',
-                          fontSize: 12,
-                        ),
-                        maxLines: 3,
-                        enabled: !_isSubmitting,
-                      ),
-                      const SizedBox(height: 16),
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          onPressed: _isSubmitting ? null : _submitTransactionHash,
-                          child: _isSubmitting
-                              ? const SizedBox(
-                                  height: 20,
-                                  width: 20,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    valueColor: AlwaysStoppedAnimation<Color>(
-                                      AppTheme.backgroundColor,
+                          child: _isVerifying
+                              ? const Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                      ),
                                     ),
-                                  ),
+                                    SizedBox(width: 12),
+                                    Text(
+                                      'Checking...',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ],
                                 )
-                              : const Text('Submit Transaction Hash'),
+                              : const Text(
+                                  'I\'VE PAID',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                  ),
+                                ),
                         ),
                       ),
                     ],
@@ -515,9 +538,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
               ),
             ],
 
-            // Success message
-            if (_hasSubmitted) ...[
-              // Success message
+            // Payment Confirmed
+            if (_paymentState == PaymentState.confirmed) ...[
               Card(
                 color: Colors.green.withOpacity(0.2),
                 child: Padding(
@@ -535,14 +557,14 @@ class _PaymentScreenState extends State<PaymentScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Transaction Submitted',
+                              'Payment Confirmed',
                               style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                                 color: Colors.green,
                               ),
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              'Verification pending. You can close this screen.',
+                              'Your payment has been verified successfully. Redirecting...',
                               style: Theme.of(context).textTheme.bodyMedium,
                             ),
                           ],
@@ -656,4 +678,3 @@ class _PaymentScreenState extends State<PaymentScreen> {
     );
   }
 }
-

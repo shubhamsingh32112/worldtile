@@ -4,6 +4,7 @@
     <!-- Location permissions for Mapbox location component -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- No storage permission needed - MediaStore handles file access -->
     
     <application
         android:label="worldtile_app"

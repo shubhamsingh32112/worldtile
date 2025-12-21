@@ -259,13 +259,6 @@ class LandService {
     required double areaInAcres,
     String? name,
     String? description,
-    // New rectangle fields
-    Map<String, double>? center,
-    double? widthMeters,
-    double? heightMeters,
-    double? rotationDegrees,
-    double? areaInMetersSquared,
-    List<Map<String, dynamic>>? areaIncreaseHistory,
   }) async {
     try {
       final body = <String, dynamic>{
@@ -273,12 +266,6 @@ class LandService {
         'areaInAcres': areaInAcres,
         if (name != null) 'name': name,
         if (description != null) 'description': description,
-        if (center != null) 'center': center,
-        if (widthMeters != null) 'widthMeters': widthMeters,
-        if (heightMeters != null) 'heightMeters': heightMeters,
-        if (rotationDegrees != null) 'rotationDegrees': rotationDegrees,
-        if (areaInMetersSquared != null) 'areaInMetersSquared': areaInMetersSquared,
-        if (areaIncreaseHistory != null) 'areaIncreaseHistory': areaIncreaseHistory,
       };
 
       final response = await http.post(
@@ -312,9 +299,22 @@ class LandService {
   /// Get all polygons for the authenticated user
   static Future<Map<String, dynamic>> getUserPolygons() async {
     try {
+      final headers = await _getHeaders();
+      final token = await _getToken();
+      
+      // Don't make request if no token
+      if (token == null || token.isEmpty) {
+        return {
+          'success': false,
+          'message': 'Authentication required',
+          'polygons': [],
+          'count': 0,
+        };
+      }
+
       final response = await http.get(
         Uri.parse('$baseUrl/polygons'),
-        headers: await _getHeaders(),
+        headers: headers,
       );
 
       final data = jsonDecode(response.body);
@@ -324,6 +324,14 @@ class LandService {
           'success': true,
           'polygons': data['polygons'] ?? [],
           'count': data['count'] ?? 0,
+        };
+      } else if (response.statusCode == 401) {
+        // Authentication error - token is invalid
+        return {
+          'success': false,
+          'message': data['message'] ?? 'Invalid token. Access denied.',
+          'polygons': [],
+          'count': 0,
         };
       } else {
         return {

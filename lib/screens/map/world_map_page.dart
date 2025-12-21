@@ -1,20 +1,17 @@
   import 'dart:async';
   import 'dart:convert';
+  import 'dart:ui';
   import 'package:flutter/material.dart';
   import 'package:flutter_dotenv/flutter_dotenv.dart';
   import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
+  import 'package:shared_preferences/shared_preferences.dart';
   import '../../theme/app_theme.dart';
-  import '../../widgets/map/draw_rectangle_button.dart';
-  import '../../widgets/map/rectangle_controls.dart';
   import '../../services/land_service.dart';
   import '../../data/open_states/open_states_geojson.dart';
   import '../../data/open_states/state_key_mapper.dart';
   import '../../data/world_bounds_helper.dart';
-  import '../../services/area_service.dart';
-  import '../../widgets/state_areas_bottom_sheet.dart';
-  import 'rectangle_drawing/rectangle_drawing_controller.dart';
-  import 'rectangle_drawing/rectangle_model.dart';
-  import 'map_controller.dart';
+import '../../widgets/state_areas_bottom_sheet.dart';
+import 'map_controller.dart';
 
   /// WorldMapPage displays a full world map using Mapbox Maps SDK
   ///
@@ -24,42 +21,41 @@
   /// - Uses Mapbox Streets style
   /// - Loads Mapbox token from .env file
   class WorldMapPage extends StatefulWidget {
-    const WorldMapPage({super.key});
+    final bool showViewOpenStatesButton;
+    
+    const WorldMapPage({
+      super.key,
+      this.showViewOpenStatesButton = false,
+    });
 
     @override
-    State<WorldMapPage> createState() => _WorldMapPageState();
+    State<WorldMapPage> createState() => WorldMapPageState();
   }
 
-  class _WorldMapPageState extends State<WorldMapPage> {
+  class WorldMapPageState extends State<WorldMapPage> {
     MapboxMap? mapboxMap;
     bool _isMapReady = false;
     String? _errorMessage;
     Timer? _loadingTimeout;
     bool _hasAppliedCustomFog = false;
-    bool _hasPlayedIntroAnimation = false; // Track if intro animation has played
-    RectangleModel? _selectedRectangle;
-  // --- Resize mode state ---
-    bool _isResizeModeActive = false; // Only allow resizing when this is true
-  // --- Dragging state ---
-    bool _isDraggingHandle = false;
-    int? _activeCornerIndex;
-    bool _waitingForDragStart = false;
-    CameraState? _cameraStateBeforeDrag; // Track camera position to prevent movement during drag
-    Offset? _lastPanPosition; // Track last pan position for smooth drag
 
-    // Rectangle drawing state
-    RectangleDrawingController? _rectangleController;
-    double _currentZoom = 0.0;
-
-    // User polygons state
-    List<RectangleModel> _userPolygons = [];
+    // User polygons state (raw GeoJSON data)
+    List<Map<String, dynamic>> _userPolygons = [];
     bool _isLoadingPolygons = false;
+
+    // Button state for "View Open States"
+    bool _showViewOpenStates = false;
+    bool _hasClickedViewOpenStates = false;
 
     @override
     void initState() {
       super.initState();
       _validateMapboxToken();
       _verifyTokenInNativeConfig();
+      
+      // Initialize button state based on widget parameter
+      _showViewOpenStates = widget.showViewOpenStatesButton;
+      
       // Set a timeout to show error if map doesn't load within 15 seconds
       _loadingTimeout = Timer(const Duration(seconds: 15), () {
         if (mounted && !_isMapReady && _errorMessage == null) {
@@ -75,9 +71,6 @@
     void dispose() {
       // Cancel timers
       _loadingTimeout?.cancel();
-
-      // Dispose rectangle controller
-      _rectangleController?.dispose();
 
       // Unbind map controller (safe no-op if already null)
       WorldMapController.instance.unbind();
@@ -237,41 +230,13 @@
         await _addOpenStatesOutlineLayer(style);
       }
 
-      // Play intro animation: globe spin + zoom to India
-      // This must run after fog is applied and style is fully loaded
-      // Runs only once per page lifecycle
-      // Defer by one microtask to ensure camera is fully attached after style reload
-      if (_hasAppliedCustomFog && !_hasPlayedIntroAnimation) {
-        Future.microtask(() => _playIntroAnimation());
-      }
+      // Intro animation disabled - static world globe on startup
+      // No rotation, no animation, camera stays at (0,0) zoom 0
 
-      // Initialize rectangle drawing controller after style is ready
-      // This runs after intro animation to avoid rectangle placement during animation
-      if (_rectangleController == null) {
-        try {
-          _rectangleController = RectangleDrawingController();
-          await _rectangleController!.init(currentMap);
-
-          // Get initial camera state
-          final cameraState = await currentMap.getCameraState();
-          if (mounted) {
-            setState(() {
-              _currentZoom = cameraState.zoom;
-            });
-          }
-
-          debugPrint('✅ Rectangle drawing controller initialized');
-  // Enable symbol-layer tap detection for selecting rectangles
-        } catch (e) {
-          debugPrint('⚠️ Error initializing rectangle controller: $e');
-        }
-      }
-
-      // Load user polygons when map is ready
+      // Load user polygons when map is ready (only if user is authenticated)
       // User polygons will be added after open states outline, so they appear on top
-      await _loadUserPolygons();
+      await _loadUserPolygonsIfAuthenticated();
     }
-  // Listen for symbol clicks (for selecting rectangles)
 
     /// Replace default fog/atmosphere with a darker, no-haze setup and dimmer stars.
     Future<bool> _applyCustomFog(StyleManager style) async {
@@ -284,13 +249,13 @@
         }
 
         decoded['fog'] = {
-          'range': [0.8, 8.0], // Keep distant fading but remove near-camera haze
-          'color': 'rgba(0, 0, 0, 0)', // No low-atmosphere tint
-          'high-color': 'rgba(0, 0, 0, 0)', // No upper-atmosphere glow
-          'horizon-blend': 0.0, // Sharp horizon to remove halo
-          'space-color': 'rgb(5, 5, 15)', // Darker space backdrop
-          'star-intensity':
-              0.25, // Dimmer stars (default is 0.35, reduced from 0.85)
+          'range': [0.8, 8.0],
+          'color': 'rgba(0, 0, 0, 0)',
+          'high-color': 'rgba(0, 0, 0, 0)',
+          'horizon-blend': 0.0,
+          // IMPORTANT: Make space fully transparent so AppShell background shows through
+          'space-color': 'rgba(0, 0, 0, 0)', // fully transparent
+          'star-intensity': 0.0, // no stars at all
         };
 
         await style.setStyleJSON(jsonEncode(decoded));
@@ -392,7 +357,6 @@
     /// - Above satellite imagery
     /// - Below open state outlines
     /// - Below user polygons
-    /// - Below rectangles
     /// 
     /// This method is idempotent and safe to call multiple times.
     /// 
@@ -523,13 +487,6 @@
         // Use solid blue color with ARGB format (0xFF0000FF = blue)
         // This visually communicates "These regions are open"
         try {
-          // Check if user-polygons-line-layer exists to position correctly
-          // Note: getStyleLayers() returns List<StyleObjectInfo?> - filter nulls first
-          final layers = await style.getStyleLayers();
-          final userPolygonLayerExists = layers
-              .whereType<StyleObjectInfo>()
-              .any((layer) => layer.id == 'user-polygons-line-layer');
-
           await style.addLayer(
             LineLayer(
               id: layerId,
@@ -552,126 +509,12 @@
       }
     }
 
-    /// Zoom to a specific location on the map
-    ///
-    /// [latitude] - Target latitude
-    /// [longitude] - Target longitude
-    /// [zoom] - Target zoom level (default: 4.0, max: 4.0)
-    /// [duration] - Animation duration in milliseconds (default: 1500)
-    Future<void> _zoomToLocation(
-      double latitude,
-      double longitude, {
-      double zoom = 4.0,
-      int duration = 1500,
-    }) async {
-      final currentMap = mapboxMap;
-      if (currentMap == null) {
-        debugPrint('⚠️ Cannot zoom: Map not ready');
-        return;
-      }
-
-      // Clamp zoom to maximum of 4
-      final clampedZoom = zoom > 4.0 ? 4.0 : zoom;
-
-      try {
-        debugPrint(
-            '📍 Zooming to location: ($latitude, $longitude) at zoom level $clampedZoom');
-
-        // Create camera options for the target location
-        final cameraOptions = CameraOptions(
-          center: Point(
-            coordinates: Position(longitude, latitude),
-          ),
-          zoom: clampedZoom,
-        );
-
-        // Animate camera to the location
-        await currentMap.flyTo(
-          cameraOptions,
-          MapAnimationOptions(
-            duration: duration,
-            startDelay: 0,
-          ),
-        );
-
-        debugPrint('✅ Successfully zoomed to location');
-      } catch (e) {
-        debugPrint('❌ Error zooming to location: $e');
-      }
-    }
-
-  /// Plays the one-time intro animation (globe spin only)
-  /// This method runs only once per page lifecycle and only after style is fully loaded
-    Future<void> _playIntroAnimation() async {
-      final currentMap = mapboxMap;
-      if (currentMap == null) {
-        debugPrint('⚠️ Cannot play intro animation: Map not ready');
-        return;
-      }
-
-      // Early return if animation already played
-      if (_hasPlayedIntroAnimation) {
-        debugPrint('ℹ️ Intro animation already played, skipping');
-        return;
-      }
-
-      // Mark as played immediately to prevent replay
-      _hasPlayedIntroAnimation = true;
-      debugPrint('🌍 Starting intro animation');
-
-      try {
-        // Get current camera state to determine starting bearing
-        final currentCameraState = await currentMap.getCameraState();
-        final startBearing = currentCameraState.bearing;
-        // Use 300° instead of 360° because globe projection normalizes 360° → 0° (Mapbox quirk)
-        final targetBearing = startBearing + 300.0;
-
-        // Disable all gestures during animation to prevent user interference
-        await _disableAllMapGestures();
-        debugPrint('🔒 Disabled all map gestures for intro animation');
-
-        // Step 1: Globe spin - animate bearing 300° while keeping zoom at 0 and center at (0,0)
-        debugPrint('🔄 Step 1: Globe spin (bearing ${startBearing}° → ${targetBearing}°)');
-        
-        final spinCameraOptions = CameraOptions(
-          center: Point(
-            coordinates: Position(0.0, 0.0), // Keep center at world center
-          ),
-          zoom: 0.0, // Keep zoom at world view
-          bearing: targetBearing, // Rotate 300° (globe projection normalizes 360° to 0°)
-          pitch: currentCameraState.pitch, // Preserve pitch
-        );
-
-        await currentMap.flyTo(
-          spinCameraOptions,
-          MapAnimationOptions(
-            duration: 4500, // ~4-5 seconds for smooth rotation
-            startDelay: 0,
-          ),
-        );
-
-        debugPrint('✅ Globe spin completed');
-
-        // Re-enable gestures after animation completes
-        await _enableMapGestures();
-        debugPrint('🔓 Re-enabled map gestures after intro animation');
-
-        debugPrint('✅ Intro animation completed successfully');
-      } catch (e) {
-        debugPrint('❌ Error during intro animation: $e');
-        // Re-enable gestures even if animation fails
-        await _enableMapGestures();
-      }
-    }
-
-    /// Handles map tap events for rectangle placement
-    /// Handles map tap events (selection + placement)
+    /// Handles map tap events
     void _onMapTap(MapContentGestureContext ctx) async {
       final lng = ctx.point.coordinates.lng.toDouble();
       final lat = ctx.point.coordinates.lat.toDouble();
-      final tap = Position(lng, lat);
 
-      // --- Check for open state polygon tap first ---
+      // --- Check for open state polygon tap ---
       // Since Mapbox Flutter SDK doesn't have queryRenderedFeatures,
       // we'll check if the tap point is inside any state polygon by loading the GeoJSON
       try {
@@ -697,7 +540,7 @@
                     debugPrint('🗺️ State polygon tapped: $stateKey');
                     // Open bottom sheet with areas for this state
                     _showStateAreasBottomSheet(stateKey);
-                    return; // Don't process rectangle tap
+                    return;
                   } else {
                     debugPrint('⚠️ Could not extract stateKey from feature properties');
                   }
@@ -709,194 +552,11 @@
         }
       } catch (e) {
         debugPrint('⚠️ Error checking state polygon tap: $e');
-        // Continue with normal tap handling
-      }
-
-      // --- Continue with rectangle handling ---
-      if (_rectangleController == null || !_rectangleController!.isInitialized) {
-        return;
-      }
-
-      // --- Detect handle tap (start drag) ----
-      final cornerIndex = await _rectangleController!.hitTestHandlePixel(tap);
-
-  // Prevent resizing unless rectangle is selected AND resize mode is active
-      if (cornerIndex != null) {
-        if (_selectedRectangle == null) {
-          debugPrint("❌ Ignored handle tap — rectangle not selected");
-          return;
-        }
-
-        if (!_isResizeModeActive) {
-          debugPrint("❌ Ignored handle tap — resize mode not active");
-          return;
-        }
-
-        debugPrint("🔵 Handle tapped: waiting for drag...");
-        _waitingForDragStart = true;
-        _activeCornerIndex = cornerIndex;
-        
-        // Camera state should already be saved when resize mode was activated
-        // But ensure it's saved just in case
-        if (mapboxMap != null && _cameraStateBeforeDrag == null) {
-          _cameraStateBeforeDrag = await mapboxMap!.getCameraState();
-        }
-        
-        // onScroll will fire even with scrolling disabled, and we'll use screen coordinates
-        return;
-      }
-
-      // --- Rectangle placement mode ---
-      if (_rectangleController!.isPlacementMode) {
-        await _rectangleController!.placeAt(tap);
-        if (mounted) setState(() {});
-        debugPrint("📍 Rectangle placed at $tap");
-        return;
-      }
-
-      // --- Normal polygon selection ---
-      final rect = _rectangleController!.rectangle;
-
-      if (rect != null) {
-        final hit = rect.containsPoint(lng, lat);
-
-        if (hit) {
-          setState(() {
-            _selectedRectangle = rect;
-            _isResizeModeActive = false; // Reset resize mode on new selection
-          });
-
-          await _rectangleController!.updateSelectionHighlight(true);
-          // Only show handles if resize mode is active
-          await _rectangleController!.setHandlesVisible(_isResizeModeActive);
-
-          // Disable map movement when rectangle is selected
-          await _disableMapGestures();
-          
-          // If resize mode is active, save camera state to lock it
-          if (_isResizeModeActive && mapboxMap != null) {
-            _cameraStateBeforeDrag = await mapboxMap!.getCameraState();
-          }
-
-          debugPrint("🎯 Rectangle selected by INSIDE hit: ${rect.id}");
-          return;
-        }
-
-        setState(() {
-          _selectedRectangle = null;
-          _isResizeModeActive = false; // Reset resize mode on deselection
-        });
-
-  // unhighlight + hide handles
-        await _rectangleController!.updateSelectionHighlight(false);
-        await _rectangleController!.setHandlesVisible(false);
-        await _enableMapGestures();
-
-        debugPrint("❌ Rectangle deselected");
-      }
-      // --- Fallback drag end ---
-      if (_isDraggingHandle) {
-        _onDragEndFallback();
-        return;
       }
     }
 
-    void _onScroll(MapContentGestureContext ctx) async {
-      // Don't use scroll events for drag - we'll use GestureDetector instead
-      // This method is kept for non-resize mode interactions
-      if (!_isResizeModeActive) {
-        // Handle normal map scrolling if needed
-        return;
-      }
-    }
 
-    /// Handle pan start for corner dragging (called from GestureDetector)
-    void _onPanStart(DragStartDetails details) async {
-      if (!_isResizeModeActive || !_waitingForDragStart || mapboxMap == null) {
-        return;
-      }
-
-      debugPrint("🔵 Pan START corner=$_activeCornerIndex");
-
-      _waitingForDragStart = false;
-      _isDraggingHandle = true;
-      _lastPanPosition = details.localPosition;
-
-      // Ensure camera state is saved
-      if (_cameraStateBeforeDrag == null) {
-        _cameraStateBeforeDrag = await mapboxMap!.getCameraState();
-      }
-
-      // Start corner drag
-      _rectangleController!.startCornerDrag(_activeCornerIndex!);
-    }
-
-    /// Handle pan update for corner dragging (called from GestureDetector)
-    void _onPanUpdate(DragUpdateDetails details) async {
-      if (!_isDraggingHandle || mapboxMap == null || _rectangleController == null) {
-        return;
-      }
-
-      // Convert screen coordinates to map coordinates
-      final screenPos = ScreenCoordinate(
-        x: details.localPosition.dx,
-        y: details.localPosition.dy,
-      );
-
-      try {
-        final mapCoord = await mapboxMap!.coordinateForPixel(screenPos);
-        final p = mapCoord.coordinates;
-
-        // Update rectangle corner position
-        await _rectangleController!.updateCornerDrag(p);
-
-        if (mounted) {
-          setState(() {
-            _lastPanPosition = details.localPosition;
-          });
-        }
-      } catch (e) {
-        debugPrint('⚠️ Error updating corner drag: $e');
-      }
-    }
-
-    /// Handle pan end for corner dragging (called from GestureDetector)
-    Future<void> _onPanEnd(DragEndDetails details) async {
-      if (!_isDraggingHandle) {
-        return;
-      }
-
-      debugPrint("🟢 Pan END");
-
-      _isDraggingHandle = false;
-      _activeCornerIndex = null;
-      _waitingForDragStart = false;
-      _lastPanPosition = null;
-
-      _rectangleController!.endCornerDrag();
-
-      // Restore gesture state
-      if (_selectedRectangle != null) {
-        await _disableMapGestures();
-        await _rectangleController!.setHandlesVisible(_isResizeModeActive);
-      } else {
-        await _enableMapGestures();
-        await _rectangleController!.setHandlesVisible(false);
-        _isResizeModeActive = false;
-      }
-    }
-
-    Future<void> _onDragEndFallback() async {
-      if (!_isDraggingHandle) return;
-
-      debugPrint("🟢 Drag END (fallback via tap)");
-      
-      // Use the same cleanup as pan end
-      await _onPanEnd(DragEndDetails());
-    }
-
-    /// Handles camera change events to track zoom level
-    /// In resize mode, camera movement is prevented by disabling scroll gestures
+    /// Handles camera change events
     /// Enforces maximum zoom level of 4
     void onCameraChange(CameraChangedEventData data) async {
       if (mapboxMap == null) return;
@@ -918,161 +578,32 @@
               pitch: cameraState.pitch,
             ),
           );
-          
-          if (mounted) {
-            setState(() {
-              _currentZoom = 4.0;
-            });
-          }
-        } else {
-          if (mounted) {
-            setState(() {
-              _currentZoom = currentZoom;
-            });
-          }
         }
       } catch (e) {
         debugPrint('⚠️ Error getting camera state: $e');
       }
     }
 
-    /// Handles draw button press to enter placement mode
-    void onDrawButtonPressed() {
-      if (_rectangleController == null || !_rectangleController!.isInitialized) {
-        debugPrint('⚠️ Rectangle controller not initialized');
-        return;
-      }
 
-      _rectangleController!.enterPlacementMode();
-
-      if (mounted) {
-        setState(() {
-          // Trigger UI rebuild
-        });
-      }
-
-      debugPrint('🎨 Entered rectangle placement mode');
-    }
-
-    /// Handles rectangle delete action
-    Future<void> onDeleteRectangle() async {
-      if (_rectangleController == null) return;
-
+    /// Check if user is authenticated
+    Future<bool> _isAuthenticated() async {
       try {
-        await _rectangleController!.clear();
-        await _rectangleController!.setHandlesVisible(false);
-
-        if (mounted) {
-          setState(() {
-            _selectedRectangle = null;
-            _isResizeModeActive = false;
-          });
-        }
-
-        await _enableMapGestures();
-
-        debugPrint('🗑️ Rectangle deleted');
+        final prefs = await SharedPreferences.getInstance();
+        final token = prefs.getString('auth_token');
+        return token != null && token.isNotEmpty;
       } catch (e) {
-        debugPrint('❌ Error deleting rectangle: $e');
+        return false;
       }
     }
 
-    /// Handles resize button press to toggle resize mode
-    Future<void> onResizeButtonPressed() async {
-      if (_rectangleController == null || _selectedRectangle == null) {
-        debugPrint('⚠️ Cannot toggle resize mode: no rectangle selected');
+    /// Load user polygons only if user is authenticated
+    Future<void> _loadUserPolygonsIfAuthenticated() async {
+      final isAuthenticated = await _isAuthenticated();
+      if (!isAuthenticated) {
+        debugPrint('ℹ️ User not authenticated, skipping polygon load');
         return;
       }
-
-      setState(() {
-        _isResizeModeActive = !_isResizeModeActive;
-      });
-
-      // Show/hide handles based on resize mode
-      await _rectangleController!.setHandlesVisible(_isResizeModeActive);
-
-      if (_isResizeModeActive) {
-        // Entering resize mode: save and lock camera state
-        if (mapboxMap != null) {
-          _cameraStateBeforeDrag = await mapboxMap!.getCameraState();
-          // Ensure gestures are disabled to prevent map movement
-          await _disableMapGestures();
-        }
-        debugPrint('🔧 Resize mode activated - map movement locked');
-      } else {
-        // Exiting resize mode: clear any pending drag state and unlock camera
-        if (_isDraggingHandle || _waitingForDragStart) {
-          await _onDragEndFallback();
-        }
-        _cameraStateBeforeDrag = null;
-        
-        // Restore gesture state based on selection
-        if (_selectedRectangle != null) {
-          // Rectangle is still selected, keep gestures disabled
-          await _disableMapGestures();
-        } else {
-          // Rectangle is not selected, enable all gestures
-          await _enableMapGestures();
-        }
-        debugPrint('✅ Resize mode deactivated - map movement unlocked');
-      }
-    }
-
-    /// Disable map gestures when rectangle is selected
-    /// When resize mode is active, disable ALL gestures to prevent map movement
-    /// We use Flutter's GestureDetector for drag handling instead
-    Future<void> _disableMapGestures() async {
-      if (mapboxMap == null) return;
-
-      // In resize mode, disable scrolling completely to prevent map movement
-      // We handle drag using Flutter's GestureDetector instead
-      await mapboxMap!.gestures.updateSettings(
-        GesturesSettings(
-          scrollEnabled: !_isResizeModeActive, // Disable in resize mode
-          scrollMode: ScrollMode.HORIZONTAL_AND_VERTICAL,
-          rotateEnabled: false,
-          pinchToZoomEnabled: false,
-          quickZoomEnabled: false,
-          doubleTapToZoomInEnabled: false,
-          doubleTouchToZoomOutEnabled: false,
-          pitchEnabled: false,
-        ),
-      );
-    }
-
-    Future<void> _enableMapGestures() async {
-      if (mapboxMap == null) return;
-
-      await mapboxMap!.gestures.updateSettings(
-        GesturesSettings(
-          scrollEnabled: true,
-          scrollMode: ScrollMode.HORIZONTAL_AND_VERTICAL,
-          rotateEnabled: true,
-          pinchToZoomEnabled: true,
-          quickZoomEnabled: true,
-          doubleTapToZoomInEnabled: true,
-          doubleTouchToZoomOutEnabled: true,
-          pitchEnabled: true,
-        ),
-      );
-    }
-
-    /// Disable all map gestures completely (used during intro animation)
-    Future<void> _disableAllMapGestures() async {
-      if (mapboxMap == null) return;
-
-      await mapboxMap!.gestures.updateSettings(
-        GesturesSettings(
-          scrollEnabled: false,
-          scrollMode: ScrollMode.HORIZONTAL_AND_VERTICAL,
-          rotateEnabled: false,
-          pinchToZoomEnabled: false,
-          quickZoomEnabled: false,
-          doubleTapToZoomInEnabled: false,
-          doubleTouchToZoomOutEnabled: false,
-          pitchEnabled: false,
-        ),
-      );
+      await _loadUserPolygons();
     }
 
     /// Load user polygons from backend
@@ -1089,7 +620,7 @@
         if (result['success'] == true) {
           final polygonsData = result['polygons'] as List;
           final polygons = polygonsData
-              .map((data) => RectangleModel.fromMongoData(data))
+              .map((data) => data as Map<String, dynamic>)
               .toList();
 
           setState(() {
@@ -1101,7 +632,15 @@
 
           debugPrint('✅ Loaded ${polygons.length} user polygons');
         } else {
-          debugPrint('⚠️ Failed to load polygons: ${result['message']}');
+          final message = result['message'] ?? 'Unknown error';
+          // Only log error, don't show to user if it's an auth error
+          if (message.contains('token') || message.contains('authentication') || message.contains('Access denied')) {
+            debugPrint('ℹ️ Authentication required to load polygons');
+            // Clear potentially invalid token
+            await _clearInvalidToken();
+          } else {
+            debugPrint('⚠️ Failed to load polygons: $message');
+          }
         }
       } catch (e) {
         debugPrint('❌ Error loading polygons: $e');
@@ -1114,14 +653,37 @@
       }
     }
 
+    /// Clear invalid token from storage
+    Future<void> _clearInvalidToken() async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final token = prefs.getString('auth_token');
+        // Check if token looks like a Firebase token (long JWT) vs our JWT (shorter)
+        // Firebase tokens are typically longer, but we can't reliably detect
+        // So we'll only clear on 401 errors
+        await prefs.remove('auth_token');
+        debugPrint('🧹 Cleared potentially invalid auth token');
+      } catch (e) {
+        debugPrint('⚠️ Error clearing token: $e');
+      }
+    }
+
     /// Display all user polygons on the map
     Future<void> _displayUserPolygons() async {
       if (mapboxMap == null || _userPolygons.isEmpty) return;
 
       try {
         // Create a FeatureCollection from all polygons
-        final features =
-            _userPolygons.map((polygon) => polygon.toGeoJsonFeature()).toList();
+        // Each polygon is already a GeoJSON feature from the API
+        final features = _userPolygons.map((polygon) => {
+          'type': 'Feature',
+          'geometry': polygon['geometry'],
+          'properties': {
+            'id': polygon['id'],
+            'name': polygon['name'],
+            'areaInAcres': polygon['areaInAcres'],
+          },
+        }).toList();
 
         final featureCollection = {
           'type': 'FeatureCollection',
@@ -1184,61 +746,6 @@
       }
     }
 
-    /// Save the current rectangle as a polygon
-    Future<void> saveCurrentRectangle() async {
-      if (_rectangleController?.rectangle == null) {
-        debugPrint('⚠️ No rectangle to save');
-        return;
-      }
-
-      final rectangle = _rectangleController!.rectangle!;
-      final geoJson =
-          rectangle.toGeoJsonFeature()['geometry'] as Map<String, dynamic>;
-
-      try {
-        final result = await LandService.savePolygon(
-          geometry: geoJson,
-          areaInAcres: rectangle.areaInAcres,
-          name: 'My Polygon ${DateTime.now().toString().substring(0, 10)}',
-        );
-
-        if (result['success'] == true) {
-          // Reload polygons to get the updated list
-          await _loadUserPolygons();
-
-          // Show success message
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Polygon saved successfully!'),
-                backgroundColor: Colors.green,
-              ),
-            );
-          }
-
-          debugPrint('✅ Polygon saved successfully');
-        } else {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Failed to save polygon: ${result['message']}'),
-                backgroundColor: Colors.red,
-              ),
-            );
-          }
-        }
-      } catch (e) {
-        debugPrint('❌ Error saving polygon: $e');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Error saving polygon: $e'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
-      }
-    }
 
     /// Checks if a point is inside a polygon (Point-in-Polygon algorithm)
     /// Supports both Polygon and MultiPolygon geometries
@@ -1306,6 +813,53 @@
         ),
         builder: (context) => StateAreasBottomSheet(stateKey: stateKey),
       );
+    }
+
+    /// Handles "View Open States" button tap
+    /// Animates camera to India and hides the button
+    Future<void> _onViewOpenStatesTap() async {
+      if (_hasClickedViewOpenStates) return; // Prevent double-tap
+      
+      setState(() {
+        _hasClickedViewOpenStates = true;
+      });
+
+      // Animate button exit (fade + scale)
+      setState(() {
+        _showViewOpenStates = false;
+      });
+
+      // Wait for button animation to start, then zoom to India
+      await Future.delayed(const Duration(milliseconds: 100));
+      
+      // Zoom to India using the controller
+      await WorldMapController.instance.zoomToIndia();
+    }
+
+    /// Resets the button state and camera when tab is switched back
+    /// Called from MainScreen when Buy Land tab is selected
+    void resetButtonState() {
+      if (mounted) {
+        setState(() {
+          _hasClickedViewOpenStates = false;
+          // Only show button if it was originally enabled
+          _showViewOpenStates = widget.showViewOpenStatesButton;
+        });
+        
+        // Reset camera to world view (0,0) zoom 0 - no animation
+        if (mapboxMap != null) {
+          mapboxMap!.setCamera(
+            CameraOptions(
+              center: Point(
+                coordinates: Position(0.0, 0.0),
+              ),
+              zoom: 0.0,
+              bearing: 0,
+              pitch: 0,
+            ),
+          );
+        }
+      }
     }
 
     /// Handles map creation errors
@@ -1471,7 +1025,6 @@
         onMapLoadErrorListener: onMapError,
         onTapListener: _onMapTap,
         onCameraChangeListener: onCameraChange,
-        onScrollListener: _onScroll,
         cameraOptions: CameraOptions(
           center: Point(
             coordinates: Position(0.0, 0.0), // Center of the world
@@ -1481,36 +1034,10 @@
         styleUri: "mapbox://styles/arhaan21/cmj4vqiqa002901s6eb5bd9k0",
       );
 
-      // Always wrap map in GestureDetector to prevent widget tree changes
-      // Conditionally enable gesture handlers based on resize mode
-      final wrappedMap = GestureDetector(
-        onPanStart: _isResizeModeActive ? _onPanStart : null,
-        onPanUpdate: _isResizeModeActive ? _onPanUpdate : null,
-        onPanEnd: _isResizeModeActive ? _onPanEnd : null,
-        behavior: HitTestBehavior.opaque, // Allow gestures to pass through when handlers are null
-        child: mapWidget,
-      );
-
       return Stack(
         children: [
-          // Mapbox Map Widget (always wrapped in GestureDetector, handlers conditionally enabled)
-          wrappedMap,
-          // Rectangle drawing button (only visible when zoomed in enough)
-          if (_isMapReady && _currentZoom >= 3.0)
-            DrawRectangleButton(
-              currentZoom: _currentZoom,
-              isPlacementMode: _rectangleController?.isPlacementMode ?? false,
-              onPressed: onDrawButtonPressed,
-            ),
-          // Rectangle controls (only visible when rectangle exists)
-          if (_isMapReady && _rectangleController?.rectangle != null)
-            RectangleControls(
-              rectangle: _rectangleController!.rectangle,
-              onDelete: onDeleteRectangle,
-              onSave: saveCurrentRectangle,
-              onResize: onResizeButtonPressed,
-              isResizeModeActive: _isResizeModeActive,
-            ),
+          // Mapbox Map Widget
+          mapWidget,
           // Loading indicator overlay
           if (!_isMapReady)
             Container(
@@ -1527,6 +1054,15 @@
                     ),
                   ],
                 ),
+              ),
+            ),
+          // "View Open States" floating button
+          if (_showViewOpenStates && _isMapReady)
+            Positioned(
+              bottom: MediaQuery.of(context).padding.bottom + 96, // Above bottom nav (80 nav + 16 spacing)
+              right: 16,
+              child: _ViewOpenStatesButton(
+                onTap: _onViewOpenStatesTap,
               ),
             ),
         ],
@@ -1555,4 +1091,121 @@
       );
     }
 
+  }
+
+  /// Glassmorphic floating button for "View Open States"
+  class _ViewOpenStatesButton extends StatefulWidget {
+    final VoidCallback onTap;
+
+    const _ViewOpenStatesButton({
+      required this.onTap,
+    });
+
+    @override
+    State<_ViewOpenStatesButton> createState() => _ViewOpenStatesButtonState();
+  }
+
+  class _ViewOpenStatesButtonState extends State<_ViewOpenStatesButton>
+      with SingleTickerProviderStateMixin {
+    late AnimationController _controller;
+    late Animation<double> _opacityAnimation;
+    late Animation<double> _scaleAnimation;
+    bool _isExiting = false;
+
+    @override
+    void initState() {
+      super.initState();
+      _controller = AnimationController(
+        duration: const Duration(milliseconds: 200),
+        vsync: this,
+      );
+
+      _opacityAnimation = Tween<double>(begin: 1.0, end: 0.0).animate(
+        CurvedAnimation(
+          parent: _controller,
+          curve: Curves.easeInOut,
+        ),
+      );
+
+      _scaleAnimation = Tween<double>(begin: 1.0, end: 0.95).animate(
+        CurvedAnimation(
+          parent: _controller,
+          curve: Curves.easeInOut,
+        ),
+      );
+    }
+
+    @override
+    void dispose() {
+      _controller.dispose();
+      super.dispose();
+    }
+
+    void _handleTap() {
+      if (_isExiting) return;
+      _isExiting = true;
+      _controller.forward().then((_) {
+        widget.onTap();
+      });
+    }
+
+    @override
+    Widget build(BuildContext context) {
+      return AnimatedBuilder(
+        animation: _controller,
+        builder: (context, child) {
+          return Opacity(
+            opacity: _opacityAnimation.value,
+            child: Transform.scale(
+              scale: _scaleAnimation.value,
+              child: GestureDetector(
+                onTap: _handleTap,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(26), // ~24-28 radius
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(26),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.2),
+                            blurRadius: 16,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.public,
+                            size: 18,
+                            color: Colors.white,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'View Open States',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    }
   }

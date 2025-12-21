@@ -1,0 +1,1 @@
+{"flutter":{"platforms":{"android":{"default":{"projectId":"world-tile","appId":"1:477957573788:android:dc23179c0cc2f85971b159","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"world-tile","configurations":{"android":"1:477957573788:android:dc23179c0cc2f85971b159","ios":"1:477957573788:ios:46a2de394765feba71b159"}}}}}}

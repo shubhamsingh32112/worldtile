@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../theme/app_theme.dart';
-import '../auth/login_screen.dart';
+import '../onboarding/onboarding_screen.dart';
 
 /// ProfileTab displays user account information and settings
 class ProfileTab extends StatelessWidget {
@@ -9,12 +9,19 @@ class ProfileTab extends StatelessWidget {
 
   Future<void> _handleLogout(BuildContext context) async {
     final prefs = await SharedPreferences.getInstance();
+    // Clear all auth-related data
     await prefs.remove('auth_token');
     await prefs.remove('user_id');
+    await prefs.remove('user_email');
+    await prefs.remove('user_name');
+    await prefs.remove('firebase_uid');
+    await prefs.remove('authenticated');
+    // Keep onboardingCompleted so user doesn't see onboarding again
 
     if (!context.mounted) return;
+    // Navigate to onboarding (which will redirect to login screen)
     Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      MaterialPageRoute(builder: (_) => const OnboardingScreen()),
       (route) => false,
     );
   }

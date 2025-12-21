@@ -20,11 +20,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   // Onboarding pages (0-4) - shown to everyone
   final List<OnboardingData> _onboardingPages = [
     OnboardingData(
-      title: 'Buy Virtual Land',
-      description:
-          'Purchase and own virtual land parcels in our futuristic metaverse. Each tile is unique and can be customized to your vision.',
-      icon: Icons.map,
-      color: AppTheme.primaryColor,
+      title: '',
+      description: '',
+      imagePath: 'assets/onboarding/WhatsApp Image 2025-12-18 at 6.41.09 AM.jpeg',
     ),
     OnboardingData(
       title: 'Crypto Payments',
@@ -93,7 +91,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   void _nextPage() {
-    // If on last onboarding page, navigate to login
+    // If on last onboarding page, navigate to login screen
     if (_currentPage == _onboardingPages.length - 1) {
       _navigateToLogin();
       return;
@@ -116,6 +114,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   Future<void> _navigateToLogin() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('has_seen_onboarding', true);
+    await prefs.setBool('onboardingCompleted', true);
     if (!mounted) return;
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(builder: (_) => const LoginScreen()),
@@ -130,50 +129,52 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppTheme.backgroundColor,
-      body: SafeArea(
-        child: Stack(
-          children: [
-            // Page view for onboarding pages
-            PageView.builder(
-              controller: _pageController,
-              physics: const AlwaysScrollableScrollPhysics(),
-              onPageChanged: (index) {
-                setState(() {
-                  _currentPage = index;
-                });
-                // Mark onboarding as seen when user reaches any page
-                _completeOnboarding();
-              },
-              itemCount: _totalPages,
-              itemBuilder: (context, index) {
-                // Show onboarding page
-                return OnboardingPage(data: _onboardingPages[index]);
-              },
-            ),
-            // Onboarding UI elements (Skip, indicator, Next button)
-            Column(
+      backgroundColor: Colors.transparent,
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final screenHeight = constraints.maxHeight;
+          final screenWidth = constraints.maxWidth;
+
+          return SafeArea(
+            child: Stack(
               children: [
-                // Skip button
-                Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      TextButton(
-                        onPressed: _skipOnboarding,
-                        child: const Text(
-                          'Skip',
-                          style: TextStyle(color: AppTheme.textSecondary),
-                        ),
-                      ),
-                    ],
+                // Page view for onboarding pages
+                PageView.builder(
+                  controller: _pageController,
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  onPageChanged: (index) {
+                    setState(() {
+                      _currentPage = index;
+                    });
+                    // Mark onboarding as seen when user reaches any page
+                    _completeOnboarding();
+                  },
+                  itemCount: _totalPages,
+                  itemBuilder: (context, index) {
+                    // Show onboarding page
+                    return OnboardingPage(
+                      data: _onboardingPages[index],
+                      pageIndex: index,
+                    );
+                  },
+                ),
+                // Skip button - positioned at top right
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: TextButton(
+                    onPressed: _skipOnboarding,
+                    child: const Text(
+                      'Skip',
+                      style: TextStyle(color: AppTheme.textSecondary),
+                    ),
                   ),
                 ),
-                const Spacer(),
-                // Page indicator
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 20.0),
+                // Page indicator - positioned at bottom (14% from bottom)
+                Positioned(
+                  bottom: screenHeight * 0.14,
+                  left: 0,
+                  right: 0,
                   child: SmoothPageIndicator(
                     controller: _pageController,
                     count: _onboardingPages.length,
@@ -186,10 +187,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     ),
                   ),
                 ),
-                // Next/Get Started button
-                Padding(
-                  padding: const EdgeInsets.all(24.0),
+                // Next/Get Started button - positioned at bottom
+                Positioned(
+                  bottom: 24,
+                  left: 24,
+                  right: 24,
                   child: SizedBox(
+                    height: 56,
                     width: double.infinity,
                     child: ElevatedButton(
                       onPressed: _nextPage,
@@ -203,8 +207,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 ),
               ],
             ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
@@ -213,14 +217,16 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 class OnboardingData {
   final String title;
   final String description;
-  final IconData icon;
-  final Color color;
+  final IconData? icon;
+  final Color? color;
+  final String? imagePath;
 
   OnboardingData({
     required this.title,
     required this.description,
-    required this.icon,
-    required this.color,
+    this.icon,
+    this.color,
+    this.imagePath,
   });
 }
 

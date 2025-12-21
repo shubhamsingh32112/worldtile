@@ -15,7 +15,8 @@ class AppTheme {
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.dark,
-      scaffoldBackgroundColor: backgroundColor,
+      // Transparent scaffold background to allow global background image to show through
+      scaffoldBackgroundColor: Colors.transparent,
       primaryColor: primaryColor,
       colorScheme: const ColorScheme.dark(
         primary: primaryColor,

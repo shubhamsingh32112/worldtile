@@ -174,5 +174,114 @@ class OrderService {
       };
     }
   }
+
+  /// Auto-verify payment for an order by checking recent transactions
+  /// [orderId] - Order ID
+  static Future<Map<String, dynamic>> autoVerifyPayment({
+    required String orderId,
+  }) async {
+    try {
+      final uri = Uri.parse('$baseUrl/orders/auto-verify-payment');
+
+      if (kDebugMode) {
+        print('🔍 Auto-verifying payment for order: $orderId');
+      }
+
+      final response = await http.post(
+        uri,
+        headers: await _getHeaders(),
+        body: jsonEncode({
+          'orderId': orderId,
+        }),
+      );
+
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode == 200) {
+        if (kDebugMode) {
+          if (data['success'] == true) {
+            print('✅ Payment auto-verified successfully');
+          } else {
+            print('⏳ Payment not detected yet: ${data['message']}');
+          }
+        }
+        return {
+          'success': data['success'] ?? false,
+          'status': data['status'] ?? 'PENDING',
+          'message': data['message'] ?? 'Payment verification pending',
+          'confirmations': data['confirmations'],
+          'txHash': data['txHash'],
+        };
+      } else {
+        if (kDebugMode) {
+          print('❌ Auto-verification failed: ${data['message']}');
+        }
+        return {
+          'success': false,
+          'message': data['message'] ?? 'Failed to auto-verify payment',
+        };
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error auto-verifying payment: $e');
+      }
+      return {
+        'success': false,
+        'message': 'Connection error: ${e.toString()}',
+      };
+    }
+  }
+
+  /// Get all orders for the authenticated user
+  /// [status] - Optional status filter (e.g., 'PAID', 'PENDING')
+  static Future<Map<String, dynamic>> getUserOrders({String? status}) async {
+    try {
+      final uri = status != null
+          ? Uri.parse('$baseUrl/orders').replace(queryParameters: {'status': status})
+          : Uri.parse('$baseUrl/orders');
+
+      if (kDebugMode) {
+        print('📋 Fetching user orders${status != null ? ' with status: $status' : ''}');
+      }
+
+      final response = await http.get(
+        uri,
+        headers: await _getHeaders(),
+      );
+
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode == 200) {
+        if (kDebugMode) {
+          print('✅ Fetched ${data['count'] ?? 0} order(s)');
+        }
+        return {
+          'success': true,
+          'orders': data['orders'] ?? [],
+          'count': data['count'] ?? 0,
+        };
+      } else {
+        if (kDebugMode) {
+          print('❌ Failed to fetch orders: ${data['message']}');
+        }
+        return {
+          'success': false,
+          'message': data['message'] ?? 'Failed to fetch orders',
+          'orders': [],
+          'count': 0,
+        };
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error fetching orders: $e');
+      }
+      return {
+        'success': false,
+        'message': 'Connection error: ${e.toString()}',
+        'orders': [],
+        'count': 0,
+      };
+    }
+  }
 }
 

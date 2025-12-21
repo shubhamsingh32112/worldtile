@@ -3,6 +3,7 @@ import '../../services/area_service.dart';
 import '../../services/order_service.dart';
 import '../../screens/payment/payment_screen.dart';
 import '../../theme/app_theme.dart';
+import '../../layouts/app_shell.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Area Details Page
@@ -249,24 +250,11 @@ class _AreaDetailsPageState extends State<AreaDetailsPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppTheme.backgroundColor,
-      appBar: AppBar(
-        backgroundColor: AppTheme.surfaceColor,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: AppTheme.textPrimary),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        title: Text(
-          'Area Details',
-          style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                color: AppTheme.textPrimary,
-                fontWeight: FontWeight.bold,
-              ),
-        ),
-      ),
-      body: _isLoading
+    return AppShell(
+      title: 'Area Details',
+      showBackButton: true,
+      showBottomNav: false,
+      child: _isLoading
           ? const Center(
               child: CircularProgressIndicator(
                 color: AppTheme.primaryColor,

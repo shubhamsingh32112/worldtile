@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "477957573788",
+    "project_id": "world-tile",
+    "storage_bucket": "world-tile.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:477957573788:android:dc23179c0cc2f85971b159",
+        "android_client_info": {
+          "package_name": "com.example.worldtile_app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "477957573788-lt9qqq35ruf0qdh3vqa1f389b5kj3m50.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.worldtile_app",
+            "certificate_hash": "4cfd53107740922837565b7067109b156dbe6c82"
+          }
+        },
+        {
+          "client_id": "477957573788-h8aaktp3bcisfabc2mj4rg557s1l79pm.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBzcI0zcrWCe_sULSoE6lunIoKHFfXj_lw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "477957573788-h8aaktp3bcisfabc2mj4rg557s1l79pm.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "477957573788-kdnsdufrjnmi1q7s4a7g9ommb1bk7j8e.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.worldtileApp"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

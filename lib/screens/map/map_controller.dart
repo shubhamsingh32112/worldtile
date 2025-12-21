@@ -33,8 +33,8 @@ class WorldMapController {
   }
 
   /// Zooms the map to India
-  /// Coordinates: (77.0, 23.5) - approximate center of India
-  /// Zoom level: 3.75 - shows India clearly
+  /// Coordinates: (78.9629, 22.5937) - center of India
+  /// Zoom level: 3.4 - shows India clearly
   Future<void> zoomToIndia() async {
     if (_map == null) {
       debugPrint('⚠️ WorldMapController: Map not bound, cannot zoom to India');
@@ -45,12 +45,16 @@ class WorldMapController {
       await _map!.flyTo(
         CameraOptions(
           center: Point(
-            coordinates: Position(77.0, 23.5), // India center
+            coordinates: Position(78.9629, 22.5937), // India center
           ),
-          zoom: 3.75,
+          zoom: 3.4,
           bearing: 0,
+          pitch: 0,
         ),
-        MapAnimationOptions(duration: 1800),
+        MapAnimationOptions(
+          duration: 1350, // 1200-1500ms range, using 1350ms
+          startDelay: 0,
+        ),
       );
       debugPrint('✅ WorldMapController: Zoomed to India');
     } catch (e) {
